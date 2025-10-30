@@ -1,0 +1,8 @@
+.mode csv
+.import amz2023_processed/All_Beauty.csv reviews
+.import amz2023_processed/Amazon_Fashion.csv reviews
+.import amz2023_processed/Appliances.csv reviews
+.import --skip 1 amz2023_processed/meta_All_Beauty.csv products
+.import --skip 1 amz2023_processed/meta_Amazon_Fashion.csv products
+.import --skip 1 amz2023_processed/meta_Appliances.csv products
+.import esci-data/shopping_queries_dataset_small.csv esci_queries
