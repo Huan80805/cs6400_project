@@ -1,0 +1,6 @@
+amz2023_*
+esci-data/
+amz.db
+amz.db*
+emb_shards/
+*.parquet
