@@ -109,6 +109,7 @@ def main():
     latencies_ms = []
     hits = 0
 
+    gtsims = []
     for i in tqdm(range(len(qid_pid_pair_list)), desc="Evaluating queries"):
         query_id, ground_truth_product_id = qid_pid_pair_list[i]
         query_vector = all_query_vectors[i : i + 1, :]  # Keep 2D shape
@@ -122,9 +123,16 @@ def main():
         end_time = time.perf_counter()
         latencies_ms.append((end_time - start_time) * 1000)
 
+        gt_vector = search.vector_store.get_vector_by_product_id(
+            ground_truth_product_id
+        )
+
+        gt_sim = (query_vector @ gt_vector.T)[0, 0]
+        gtsims.append(gt_sim)
+
         print("Result:")
         print(
-            f"ground_truth_product_id: {ground_truth_product_id}, matched: {int(ground_truth_product_id) in final_result_pid},  query_id: {query_id}"
+            f"ground_truth_product_id: {ground_truth_product_id}, matched: {int(ground_truth_product_id) in final_result_pid}, query_id: {query_id}, cosine similarity: {gt_sim}"
         )
 
         # This has not been updated,
@@ -144,6 +152,10 @@ def main():
     print(f"Recall@1:          {recall_at_1:.4f}")
     print(f"Avg. Latency (ms): {avg_latency:.2f}")
     print(f"P95 Latency (ms):  {p95_latency:.2f}")
+    avg_gt_sim = np.mean(gtsims) if gtsims else 0
+    median_gt_sim = np.median(gtsims) if gtsims else 0
+    print(f"Avg. GT Sim:       {avg_gt_sim:.4f}")
+    print(f"Median GT Sim:       {median_gt_sim:.4f}")
 
     # --- 5. Clean up ---
     db.close()
