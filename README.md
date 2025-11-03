@@ -19,6 +19,8 @@ python load_filters.py --db amz.db --json filters_deduplicated.json
 ```
 
 ### Running Evaluation
+Download the product embedding (it takes a long while to generate them!): https://drive.google.com/file/d/1KPoeD8GW1MQpohbAI0lnNcLdxhhtt3hw/view?usp=sharing
+Save it as ./embeddings.parquet
 
 ```bash
 python main.py
