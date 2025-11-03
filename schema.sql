@@ -39,7 +39,8 @@ CREATE TABLE products (
   bought_together_json TEXT,   -- JSON text
   brand                TEXT,
   color                TEXT,
-  product_locale       TEXT
+  product_locale       TEXT,
+  filters_json         TEXT
 );
 
 -- ESCI
