@@ -9,11 +9,10 @@ class DB:
         self.conn = sqlite3.connect(path)
         self.conn.row_factory = sqlite3.Row
 
-    # Only test on %freezer% so that the dataset is smaller
     def count_products(self, categories: Optional[List[str]]) -> int:
         cur = self.conn.cursor()
         if categories:
-            q = f"SELECT COUNT(*) FROM products WHERE main_category IN ({','.join(['?'] * len(categories))}) AND product_title LIKE '%freezer%'"
+            q = f"SELECT COUNT(*) FROM products WHERE main_category IN ({','.join(['?'] * len(categories))})"
             cur.execute(q, categories)
         else:
             cur.execute("SELECT COUNT(*) FROM products")
@@ -27,7 +26,7 @@ class DB:
             q = (
                 "SELECT product_id, parent_asin, main_category, product_title AS title, features_json AS features_text, details_json AS details_text\n"
                 "FROM products\n"
-                f"WHERE main_category IN ({','.join(['?'] * len(categories))}) AND product_title LIKE '%freezer%'\n"
+                f"WHERE main_category IN ({','.join(['?'] * len(categories))})\n"
                 "ORDER BY product_id ASC\n"
                 "LIMIT ? OFFSET ?"
             )
@@ -57,22 +56,36 @@ class DB:
         )
         return [(r[0], r[1]) for r in cur.fetchall()]
 
-    def load_esci_queries(self) -> List[Tuple[str, str, str]]:
+    def load_esci_queries(
+        self, categories: Optional[List[str]]
+    ) -> List[Tuple[str, str, str]]:
         """
         Use 'E' label
         Returns list of (query_id, query_text, ground_truth_product_id, filters_json)
         ground_truth_product_id is parent_asin
         """
         cur = self.conn.cursor()
-        cur.execute(
-            """
-            SELECT eq.query_id, eq.query, p.product_id, p.filters_json
-            FROM esci_queries eq
-            JOIN products p 
-            ON eq.product_id  = p.parent_asin
-            WHERE esci_label = 'E' AND small_version = 1 AND p.main_category = 'Appliances' AND p.product_title LIKE '%freezer%'
-            """
-        )
+        if categories:
+            cur.execute(
+                f"""
+                SELECT eq.query_id, eq.query, p.product_id, p.filters_json
+                FROM esci_queries eq
+                JOIN products p 
+                ON eq.product_id  = p.parent_asin
+                WHERE esci_label = 'E' AND small_version = 1 AND p.main_category IN ({",".join(["?"] * len(categories))})
+                """,
+                categories,
+            )
+        else:
+            cur.execute(
+                """
+                SELECT eq.query_id, eq.query, p.product_id, p.filters_json
+                FROM esci_queries eq
+                JOIN products p 
+                ON eq.product_id  = p.parent_asin
+                WHERE esci_label = 'E' AND small_version = 1
+                """
+            )
 
         queries = cur.fetchall()
         return [
@@ -83,22 +96,42 @@ class DB:
     def _build_filter_clause(self, filter_dict: Dict) -> Tuple[str, tuple]:
         """
         Helper to build SQL WHERE clauses and params from a filter dict.
-        Example: {"average_rating": (">=", 4.0)}
-        Returns: ("AND average_rating >= ?", (4.0,))
+        Example: {"average_rating": ("BETWEEN", (3.5, 3.7))}
+        Returns: ("AND average_rating BETWEEN ? AND ?", (3.5, 3.7))
         """
         clauses = []
         params = []
         for col, op_val in filter_dict.items():
             op, val = op_val
-            # Basic validation to prevent SQL injection, though
-            # col and op are from our own code
+
+            # Basic validation to prevent SQL injection
             if not all(c.isalnum() or c == "_" for c in col):
                 raise ValueError(f"Invalid column name: {col}")
-            if op not in (">=", "<=", "=", ">", "<", "!=", "IN", "LIKE"):
+
+            # --- UPDATED: Added 'BETWEEN' ---
+            if op.upper() not in (
+                ">=",
+                "<=",
+                "=",
+                ">",
+                "<",
+                "!=",
+                "IN",
+                "LIKE",
+                "BETWEEN",
+            ):
                 raise ValueError(f"Invalid operator: {op}")
 
-            clauses.append(f"AND {col} {op} ?")
-            params.append(val)
+            if op.upper() == "BETWEEN":
+                if not (isinstance(val, (list, tuple)) and len(val) == 2):
+                    raise ValueError(
+                        f"BETWEEN operator requires a 2-element list/tuple. Got {val}"
+                    )
+                clauses.append(f"AND {col} BETWEEN ? AND ?")
+                params.extend(val)  # Add both values to params
+            else:
+                clauses.append(f"AND {col} {op} ?")
+                params.append(val)
 
         return " ".join(clauses), tuple(params)
 

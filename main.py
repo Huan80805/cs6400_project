@@ -8,6 +8,7 @@ from tqdm import tqdm
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+from typing import Any, Optional
 
 # Import our classes
 from db import DB
@@ -74,17 +75,81 @@ def load_query_embeddings(
     return qid_pid_filter_list, vectors
 
 
+def select_filter_by_selectivity(
+    filter_list: list[dict[str, Any]],
+    target_percent: float,
+    selectivity_range: tuple[float, float],
+) -> Optional[dict[str, Any]]:
+    """
+    Selects one filter from the list that falls within the valid
+    selectivity_range AND is closest to the target_percent.
+    """
+    if not filter_list:
+        return None
+
+    min_perc, max_perc = selectivity_range
+
+    # 1. Find all valid filters *within the correct bucket*
+    valid_filters = []
+    for f in filter_list:
+        perc = f.get("match_percentage")
+        if perc is not None and min_perc <= perc < max_perc:
+            valid_filters.append(f)
+
+    # 2. If no filters are in this bucket, we can't use one.
+    if not valid_filters:
+        return None
+
+    # 3. From the valid subset, find the one closest to our ideal target.
+    selected_filter = min(
+        valid_filters,
+        key=lambda f: abs(f.get("match_percentage", 101) - target_percent),
+    )
+    return selected_filter
+
+
+def build_filter_from_spec(spec: dict[str, Any]) -> dict[str, Any]:
+    """
+    Takes: {"filter_column": "average_rating", "filter_value": [3.5, 3.7], ...}
+    Returns: {"average_rating": ("BETWEEN", (3.5, 3.7))}
+    """
+    if not spec:
+        return {}
+
+    col = spec.get("filter_column")
+    val = spec.get("filter_value")
+
+    if col is None or val is None:
+        return {}
+
+    # Handle range/list values as BETWEEN
+    if isinstance(val, list) and len(val) == 2:
+        return {col: ("BETWEEN", tuple(val))}
+
+    # Handle JSON/text LIKE searches
+    if col in ("features_json", "details_json"):
+        return {col: ("LIKE", f"%{val}%")}
+
+    # Default to simple equality
+    return {col: ("=", val)}
+
+
 def main():
     DB_PATH = "amz.db"
     EMBEDDINGS_PATH = "embeddings.parquet"
     QUERY_EMBEDDINGS_PATH = "query_embeddings.parquet"
-    QUERY_BATCH_SIZE = 256  # Use a larger batch size
+    QUERY_BATCH_SIZE = 256
 
     K_GOAL = 1
-    M_FACTOR = 1000
+    M_FACTOR = 1000  # large over-fetch factor for postfiltering
     K_FETCH = K_GOAL * M_FACTOR
 
-    # This static filter is no longer used, we use a dynamic one per-query
+    SELECTIVITY_TARGETS = [
+        ("Low (<1%)", 0.1, (0.0, 1.0)),
+        ("Low-Mid (1-10%)", 1.0, (1.0, 10.0)),
+        ("Mid (10-50%)", 10.0, (10.0, 50.0)),
+        ("High (>50%)", 50.0, (50.0, 101.0)),  # Use 101 to be inclusive
+    ]
 
     db = DB(path=DB_PATH)
     encoder = Encoder()
@@ -98,7 +163,7 @@ def main():
         )
     else:
         print("No cache found. Encoding queries...")
-        queries = db.load_esci_queries()
+        queries = db.load_esci_queries()  # This now returns 4-tuples
         assert queries, "Exiting because no queries are found."
 
         query_texts = [q[1] for q in queries]
@@ -117,78 +182,105 @@ def main():
             QUERY_EMBEDDINGS_PATH, sorted_queries, all_query_vectors_sorted
         )
 
-        # Create the 3-tuple list: (qid, pid, filters_json)
+        # Create the 3-tuple list: (qid, pid, filters_json_string)
         qid_pid_filter_list = [
-            (q[0], q[2], q[3] if q[3] else "{}") for q in sorted_queries
+            (q[0], q[2], q[3] if q[3] else "[]") for q in sorted_queries
         ]
         all_query_vectors = all_query_vectors_sorted
 
-    latencies_ms = []
-    hits = 0
+    all_results = []  # Store results for each level
 
-    gtsims = []
-    for i in tqdm(range(len(qid_pid_filter_list)), desc="Evaluating queries"):
-        _, ground_truth_product_id_str, filters_json = qid_pid_filter_list[i]
-        ground_truth_product_id = int(ground_truth_product_id_str)  # Ensure it's int
+    for level_name, target_percent, selectivity_range in SELECTIVITY_TARGETS:
+        latencies_ms = []
+        hits = 0
+        gtsims = []
+        total_queries = 0
 
-        query_vector = all_query_vectors[i : i + 1, :]  # Keep 2D shape
+        for i in tqdm(
+            range(len(qid_pid_filter_list)),
+            desc=f"Evaluating Post-Filter (Selectivity ~{target_percent}%)",
+        ):
+            query_id, ground_truth_product_id_str, filters_json_string = (
+                qid_pid_filter_list[i]
+            )
+            ground_truth_product_id = int(ground_truth_product_id_str)
 
-        # --- DYNAMIC FILTER PREPARATION ---
-        # 1. Parse the JSON string
-        try:
-            loaded_filter_dict = json.loads(filters_json)
-        except json.JSONDecodeError:
-            loaded_filter_dict = {}  # Default to empty if JSON is invalid
+            query_vector = all_query_vectors[i : i + 1, :]
 
-        # 2. Convert inner lists (from JSON) to tuples (for db.py)
-        # Assumes filters_json is like: '{"average_rating": [">=", 4.0]}'
-        # Converts to: {"average_rating": (">=", 4.0)}
-        dynamic_filter = {
-            key: tuple(op_val)
-            for key, op_val in loaded_filter_dict.items()
-            if isinstance(op_val, list)
-        }
+            try:
+                filter_suite = json.loads(filters_json_string)
+            except json.JSONDecodeError:
+                filter_suite = []  # Default to empty if JSON is invalid
 
-        start_time = time.perf_counter()
+            # Select filter based on the *current* loop's target_percent
+            selected_spec = select_filter_by_selectivity(
+                filter_suite, target_percent, selectivity_range
+            )
+            dynamic_filter = build_filter_from_spec(selected_spec)
 
-        final_result_pids = search.postfilter_search(
-            query_vector=query_vector,
-            k=K_FETCH,
-            filter=dynamic_filter,
+            if not dynamic_filter:
+                continue
+
+            total_queries += 1
+            start_time = time.perf_counter()
+
+            final_result_pids = search.postfilter_search(
+                query_vector=query_vector,
+                k=K_FETCH,
+                filter=dynamic_filter,
+            )
+
+            final_result_set = set(final_result_pids)
+            end_time = time.perf_counter()
+            latencies_ms.append((end_time - start_time) * 1000)
+
+            gt_vector = search.vector_store.get_vector_by_product_id(
+                ground_truth_product_id
+            )
+
+            gt_sim = (
+                (query_vector @ gt_vector.T)[0, 0] if gt_vector is not None else -1.0
+            )
+            gtsims.append(gt_sim)
+
+            is_hit = ground_truth_product_id in final_result_set
+
+            if is_hit:
+                hits += 1
+
+        recall = (hits / total_queries) if total_queries > 0 else 0
+        avg_latency = np.mean(latencies_ms) if latencies_ms else 0
+        p95_latency = np.percentile(latencies_ms, 95) if latencies_ms else 0
+        avg_gt_sim = np.mean(gtsims) if gtsims else 0
+
+        all_results.append(
+            {
+                "level": level_name,
+                "target_selectivity": f"~{target_percent}%",
+                "total_queries": total_queries,
+                "hits": hits,
+                "recall": recall,
+                "avg_latency_ms": avg_latency,
+                "p95_latency_ms": p95_latency,
+                "average_cosine_similarity_between_query_vector_and_ground_truth_item": avg_gt_sim,
+            }
         )
 
-        final_result_set = set(final_result_pids)
-        end_time = time.perf_counter()
-        latencies_ms.append((end_time - start_time) * 1000)
+    print("\n--- FINAL SUMMARY: POST-FILTERING BY SELECTIVITY ---")
+    print("-" * 70)
+    print(f"M_FACTOR (Overfetch): {M_FACTOR} (K_FETCH={K_FETCH})")
+    print(
+        f"{'Level':<18} | {'Recall':<8} | {'P95 Lat (ms)':<12} | {'Avg Lat (ms)':<12} | {'Hits':<5}"
+    )
+    print("-" * 70)
 
-        gt_vector = search.vector_store.get_vector_by_product_id(
-            ground_truth_product_id
+    for metrics in all_results:
+        print(
+            f"{metrics['level']:<18} | {metrics['recall']:<8.4f} | {metrics['p95_latency_ms']:<12.2f} | {metrics['avg_latency_ms']:<12.2f} | {metrics['hits']:<5}"
         )
 
-        gt_sim = (query_vector @ gt_vector.T)[0, 0] if gt_vector is not None else -1.0
-        gtsims.append(gt_sim)
+    print("-" * 70)
 
-        is_hit = ground_truth_product_id in final_result_set
-
-        # Recall@1 logic: Check if the top result (if any) is the GT
-        if is_hit:
-            hits += 1
-
-    total_queries = len(qid_pid_filter_list)
-    recall_at_1 = (hits / total_queries) if total_queries > 0 else 0
-    avg_latency = np.mean(latencies_ms) if latencies_ms else 0
-    p95_latency = np.percentile(latencies_ms, 95) if latencies_ms else 0
-
-    print(f"Total Queries:     {total_queries}")
-    print(f"Total Hits:        {hits}")
-    print(f"Recall@1:          {recall_at_1:.4f}")
-    print(f"Avg. Latency (ms): {avg_latency:.2f}")
-    print(f"P95 Latency (ms):  {p95_latency:.2f}")
-    avg_gt_sim = np.mean(gtsims) if gtsims else 0
-    median_gt_sim = np.median(gtsims) if gtsims else 0
-    print(f"Avg. GT Sim:       {avg_gt_sim:.4f}")
-
-    # --- 5. Clean up ---
     db.close()
 
 

@@ -220,7 +220,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
 
     p.add_argument(
-        "--page_size", type=int, default=512, help="Products fetched per page"
+        "--page_size", type=int, default=1024, help="Products fetched per page"
     )
     p.add_argument("--offset", type=int, default=0, help="Starting row offset")
 
@@ -237,7 +237,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument(
         "--topk_reviews",
         type=int,
-        default=20,
+        default=5,
         help="Max number of reviews to append per product",
     )
     p.add_argument(

@@ -19,7 +19,7 @@ class EncoderConfig:
     query_max_length: int = 64
     doc_max_length: int = 64
     doc_stride: int = 10
-    batch_size: int = 64
+    batch_size: int = 256
     device: Optional[str] = None
     dtype: Optional[torch.dtype] = None
     normalize: bool = True
