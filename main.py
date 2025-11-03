@@ -141,7 +141,7 @@ def main():
     QUERY_BATCH_SIZE = 256
 
     K_GOAL = 1
-    M_FACTOR = 1000  # large over-fetch factor for postfiltering
+    M_FACTOR = 100  # large over-fetch factor for postfiltering
     K_FETCH = K_GOAL * M_FACTOR
 
     SELECTIVITY_TARGETS = [
@@ -195,6 +195,7 @@ def main():
         hits = 0
         gtsims = []
         total_queries = 0
+        result_set_size = []
 
         for i in tqdm(
             range(len(qid_pid_filter_list)),
@@ -233,6 +234,7 @@ def main():
             final_result_set = set(final_result_pids)
             end_time = time.perf_counter()
             latencies_ms.append((end_time - start_time) * 1000)
+            result_set_size.append(len(list(final_result_set)))
 
             gt_vector = search.vector_store.get_vector_by_product_id(
                 ground_truth_product_id
@@ -249,6 +251,7 @@ def main():
                 hits += 1
 
         recall = (hits / total_queries) if total_queries > 0 else 0
+        avg_result_set_size = np.mean(result_set_size) if result_set_size else 0
         avg_latency = np.mean(latencies_ms) if latencies_ms else 0
         p95_latency = np.percentile(latencies_ms, 95) if latencies_ms else 0
         avg_gt_sim = np.mean(gtsims) if gtsims else 0
@@ -260,6 +263,7 @@ def main():
                 "total_queries": total_queries,
                 "hits": hits,
                 "recall": recall,
+                "avg_result_set_size": avg_result_set_size,
                 "avg_latency_ms": avg_latency,
                 "p95_latency_ms": p95_latency,
                 "average_cosine_similarity_between_query_vector_and_ground_truth_item": avg_gt_sim,
@@ -270,13 +274,13 @@ def main():
     print("-" * 70)
     print(f"M_FACTOR (Overfetch): {M_FACTOR} (K_FETCH={K_FETCH})")
     print(
-        f"{'Level':<18} | {'Recall':<8} | {'P95 Lat (ms)':<12} | {'Avg Lat (ms)':<12} | {'Hits':<5}"
+        f"{'Level':<18} | {'Recall':<8} | {'Avg Result Set Size':<8} | {'P95 Lat (ms)':<12} | {'Avg Lat (ms)':<12} | {'Hits':<5}"
     )
     print("-" * 70)
 
     for metrics in all_results:
         print(
-            f"{metrics['level']:<18} | {metrics['recall']:<8.4f} | {metrics['p95_latency_ms']:<12.2f} | {metrics['avg_latency_ms']:<12.2f} | {metrics['hits']:<5}"
+            f"{metrics['level']:<18} | {metrics['recall']:<8.4f} | {metrics['avg_result_set_size']:<5} | {metrics['p95_latency_ms']:<12.2f} | {metrics['avg_latency_ms']:<12.2f} | {metrics['hits']:<5}"
         )
 
     print("-" * 70)
