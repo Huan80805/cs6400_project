@@ -47,17 +47,15 @@ class Search:
         distances, ids = self.index.search(query_vector, k)
         candidate_ids = ids[0].tolist()
 
-        # post-filtering
-        # filtered_allowed_set = self.db.get_filtered_ids(candidate_ids, filter)
-        # filtered_allowed_set = set(candidate_ids)
+        filtered_allowed_set = self.db.get_filtered_ids(candidate_ids, filter)
+        filtered_allowed_set = set(candidate_ids)
 
-        # results = []
-        # for pid in candidate_ids:
-        #     if pid in filtered_allowed_set:
-        #         results.append(pid)
+        results = []
+        for pid in candidate_ids:
+            if pid in filtered_allowed_set:
+                results.append(pid)
 
-        # return results
-        return candidate_ids
+        return results
 
     def prefilter_search(
         self, query_vector: np.ndarray, k: int, filter: Dict

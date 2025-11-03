@@ -60,13 +60,13 @@ class DB:
     def load_esci_queries(self) -> List[Tuple[str, str, str]]:
         """
         Use 'E' label
-        Returns list of (query_id, query_text, ground_truth_product_id)
+        Returns list of (query_id, query_text, ground_truth_product_id, filters_json)
         ground_truth_product_id is parent_asin
         """
         cur = self.conn.cursor()
         cur.execute(
             """
-            SELECT eq.query_id, eq.query, p.product_id
+            SELECT eq.query_id, eq.query, p.product_id, p.filters_json
             FROM esci_queries eq
             JOIN products p 
             ON eq.product_id  = p.parent_asin
@@ -75,29 +75,57 @@ class DB:
         )
 
         queries = cur.fetchall()
-        return [(r["query_id"], r["query"], r["product_id"]) for r in queries]
+        return [
+            (r["query_id"], r["query"], r["product_id"], r["filters_json"])
+            for r in queries
+        ]
+
+    def _build_filter_clause(self, filter_dict: Dict) -> Tuple[str, tuple]:
+        """
+        Helper to build SQL WHERE clauses and params from a filter dict.
+        Example: {"average_rating": (">=", 4.0)}
+        Returns: ("AND average_rating >= ?", (4.0,))
+        """
+        clauses = []
+        params = []
+        for col, op_val in filter_dict.items():
+            op, val = op_val
+            # Basic validation to prevent SQL injection, though
+            # col and op are from our own code
+            if not all(c.isalnum() or c == "_" for c in col):
+                raise ValueError(f"Invalid column name: {col}")
+            if op not in (">=", "<=", "=", ">", "<", "!=", "IN", "LIKE"):
+                raise ValueError(f"Invalid operator: {op}")
+
+            clauses.append(f"AND {col} {op} ?")
+            params.append(val)
+
+        return " ".join(clauses), tuple(params)
 
     def get_filtered_ids(self, candidate_ids: List[int], filter: Dict) -> Set[int]:
-        # TODO:
-        # placeholders = ",".join(["?"] * len(candidate_ids))
-        # sql = f"""
-        #    SELECT product_id FROM products
-        #    WHERE product_id IN ({placeholders})
-        #    AND average_rating >= ?
-        # """
-        # params = (*candidate_ids, 4.0) # (id1, id2, ..., 4.0)
-        # cur = self.conn.cursor()
-        # cur.execute(sql, params)
-
+        """
+        Filters a list of candidate_ids against the DB.
+        Used for post-filtering.
+        """
         if not candidate_ids:
             return set()
 
-        placeholders = ",".join(["?"] * len(candidate_ids))
-        # "AND average_rating >= 4.0"
-        sql = f"SELECT product_id FROM products WHERE product_id IN ({placeholders})"
-
         cur = self.conn.cursor()
-        cur.execute(sql, tuple(candidate_ids))
+        placeholders = ",".join(["?"] * len(candidate_ids))
+
+        # Build the dynamic filter clause
+        where_clause, filter_params = self._build_filter_clause(filter)
+
+        sql = f"""
+           SELECT product_id FROM products
+           WHERE product_id IN ({placeholders})
+           {where_clause}
+        """
+
+        # Combine candidate IDs and filter params
+        params = (*candidate_ids, *filter_params)
+
+        cur.execute(sql, params)
         final_ids = {row[0] for row in cur.fetchall()}
         return final_ids
 
