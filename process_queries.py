@@ -82,7 +82,7 @@ print(f"Rows after language filter: {filtered_rows_2}")
 print(f"Rows removed: {initial_rows_2 - filtered_rows_2}")
 
 # Save the final filtered DataFrame to a new csv file
-output_file = 'esci-data/shopping_queries_dataset/shopping_queries_dataset_small.csv'
+output_file = 'esci-data/shopping_queries_dataset_small.csv'
 df_final_filtered.to_csv(output_file, index=False)
 print(f"Final filtered dataset saved to {output_file}")
 
