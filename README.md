@@ -4,8 +4,7 @@
 git clone https://github.com/amazon-science/esci-data.git # remember to enable lfs
 python process_queries.py
 ```
-
-> Huan: Filtering (union between queries and item subsets, languages) on queries needs to be done. I didn't save the code and I'll update this on Saturday :(.
+This will apply product subset filters and langauge filters (English).
 
 ### Constructing Database
 
