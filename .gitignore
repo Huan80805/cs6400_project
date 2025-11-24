@@ -4,3 +4,4 @@ amz.db
 amz.db*
 emb_shards/
 *.parquet
+__pycache__/
