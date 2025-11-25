@@ -66,7 +66,7 @@ def load_filters_to_db(db_path: str, json_path: str, batch_size: int = 5000):
             filters_list = item["filters"]
             # Convert the list of filters to a single JSON string
             filters_json = json.dumps(filters_list)
-            update_params.append((filters_json, product_id))
+            update_params.append((product_id, filters_json))
         except Exception as e:
             print(
                 f"Warning: Skipping item due to processing error: {e} | Item: {item}",
@@ -89,10 +89,10 @@ def load_filters_to_db(db_path: str, json_path: str, batch_size: int = 5000):
         cur.execute("PRAGMA journal_mode=WAL;")
         cur.execute("PRAGMA synchronous=NORMAL;")
 
+        # insert into product_filters table
         update_query = """
-            UPDATE products
-            SET filters_json = ?
-            WHERE product_id = ?
+            INSERT OR REPLACE INTO product_filters (product_id, filters_json)
+            VALUES (?, ?)
         """
 
         # Use executemany in batches
