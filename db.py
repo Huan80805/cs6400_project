@@ -57,7 +57,7 @@ class DB:
         return [(r[0], r[1]) for r in cur.fetchall()]
 
     def load_esci_queries(
-        self, categories: Optional[List[str]]
+        self, categories :Optional[List[str]] = None
     ) -> List[Tuple[str, str, str]]:
         """
         Use 'E' label

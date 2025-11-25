@@ -1,0 +1,2 @@
+.mode csv
+.import esci-data/shopping_queries_dataset_small.csv esci_queries
