@@ -6,8 +6,11 @@ import numpy as np
 
 class DB:
     def __init__(self, path: str):
+        print(f"Connecting to DB at {path}")
         self.conn = sqlite3.connect(path)
+        print("DB connection established.")
         self.conn.row_factory = sqlite3.Row
+        print("Row factory set.")
 
     def count_products(self, categories: Optional[List[str]]) -> int:
         cur = self.conn.cursor()

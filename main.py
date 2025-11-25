@@ -150,12 +150,18 @@ def main():
         ("Mid (10-50%)", 10.0, (10.0, 50.0)),
         ("High (>50%)", 50.0, (50.0, 101.0)),  # Use 101 to be inclusive
     ]
-
+    print("in main")
     db = DB(path=DB_PATH)
+    print("DB loaded.")
     encoder = Encoder()
+    print("Encoder initialized.")
     search = Search(db=db, encoder=encoder, parquet_path=EMBEDDINGS_PATH)
-
+    print("building index...")
     search.build_index()
+    # Build IVFPQ index as an additional ANN backend (new)
+    print("built index, now building IVFPQ index...")
+    search.build_ivfpq_index()
+    print("IVFPQ index build complete.")
 
     if os.path.exists(QUERY_EMBEDDINGS_PATH):
         qid_pid_filter_list, all_query_vectors = load_query_embeddings(
@@ -279,6 +285,105 @@ def main():
     print("-" * 70)
 
     for metrics in all_results:
+        print(
+            f"{metrics['level']:<18} | {metrics['recall']:<8.4f} | {metrics['avg_result_set_size']:<5} | {metrics['p95_latency_ms']:<12.2f} | {metrics['avg_latency_ms']:<12.2f} | {metrics['hits']:<5}"
+        )
+
+    print("-" * 70)
+
+    # =========================
+    # IVFPQ evaluation (added)
+    # =========================
+    all_results_ivfpq = []  # Store IVFPQ results for each level
+
+    for level_name, target_percent, selectivity_range in SELECTIVITY_TARGETS:
+        latencies_ms = []
+        hits = 0
+        gtsims = []
+        total_queries = 0
+        result_set_size = []
+
+        for i in tqdm(
+            range(len(qid_pid_filter_list)),
+            desc=f"Evaluating Post-Filter IVFPQ (Selectivity ~{target_percent}%)",
+        ):
+            query_id, ground_truth_product_id_str, filters_json_string = (
+                qid_pid_filter_list[i]
+            )
+            ground_truth_product_id = int(ground_truth_product_id_str)
+
+            query_vector = all_query_vectors[i : i + 1, :]
+
+            try:
+                filter_suite = json.loads(filters_json_string)
+            except json.JSONDecodeError:
+                filter_suite = []  # Default to empty if JSON is invalid
+
+            selected_spec = select_filter_by_selectivity(
+                filter_suite, target_percent, selectivity_range
+            )
+            dynamic_filter = build_filter_from_spec(selected_spec)
+
+            if not dynamic_filter:
+                continue
+
+            total_queries += 1
+            start_time = time.perf_counter()
+
+            final_result_pids = search.postfilter_search_ivfpq(
+                query_vector=query_vector,
+                k=K_FETCH,
+                filter=dynamic_filter,
+            )
+
+            final_result_set = set(final_result_pids)
+            end_time = time.perf_counter()
+            latencies_ms.append((end_time - start_time) * 1000)
+            result_set_size.append(len(list(final_result_set)))
+
+            gt_vector = search.vector_store.get_vector_by_product_id(
+                ground_truth_product_id
+            )
+
+            gt_sim = (
+                (query_vector @ gt_vector.T)[0, 0] if gt_vector is not None else -1.0
+            )
+            gtsims.append(gt_sim)
+
+            is_hit = ground_truth_product_id in final_result_set
+
+            if is_hit:
+                hits += 1
+
+        recall = (hits / total_queries) if total_queries > 0 else 0
+        avg_result_set_size = np.mean(result_set_size) if result_set_size else 0
+        avg_latency = np.mean(latencies_ms) if latencies_ms else 0
+        p95_latency = np.percentile(latencies_ms, 95) if latencies_ms else 0
+        avg_gt_sim = np.mean(gtsims) if gtsims else 0
+
+        all_results_ivfpq.append(
+            {
+                "level": level_name,
+                "target_selectivity": f"~{target_percent}%",
+                "total_queries": total_queries,
+                "hits": hits,
+                "recall": recall,
+                "avg_result_set_size": avg_result_set_size,
+                "avg_latency_ms": avg_latency,
+                "p95_latency_ms": p95_latency,
+                "average_cosine_similarity_between_query_vector_and_ground_truth_item": avg_gt_sim,
+            }
+        )
+
+    print("\n--- FINAL SUMMARY: POST-FILTERING BY SELECTIVITY (IVFPQ) ---")
+    print("-" * 70)
+    print(f"M_FACTOR (Overfetch): {M_FACTOR} (K_FETCH={K_FETCH})")
+    print(
+        f"{'Level':<18} | {'Recall':<8} | {'Avg Result Set Size':<8} | {'P95 Lat (ms)':<12} | {'Avg Lat (ms)':<12} | {'Hits':<5}"
+    )
+    print("-" * 70)
+
+    for metrics in all_results_ivfpq:
         print(
             f"{metrics['level']:<18} | {metrics['recall']:<8.4f} | {metrics['avg_result_set_size']:<5} | {metrics['p95_latency_ms']:<12.2f} | {metrics['avg_latency_ms']:<12.2f} | {metrics['hits']:<5}"
         )

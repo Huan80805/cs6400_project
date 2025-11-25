@@ -9,12 +9,14 @@ class VectorStore:
         filters: dict | None = None,
     ):
         if not filters:
+            print("if triggered")
             self.df = pd.read_parquet(path)
         elif filters.get("product_id"):
+            print("elif triggered")
             self.df = pd.read_parquet(
                 path, filters=[("product_id", "in", filters["product_id"])]
             )
-
+        print(f"Loaded {len(self.df)} vectors from {path} with filters: {filters}")
         self.vectors = np.stack(self.df["vector"].values).astype("float32")
         self.product_ids = self.df["product_id"].values.astype("int64")
         self.dims = int(self.vectors.shape[1])

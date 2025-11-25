@@ -5,3 +5,4 @@ amz.db*
 emb_shards/
 *.parquet
 __pycache__/
+embeddings.parquet
