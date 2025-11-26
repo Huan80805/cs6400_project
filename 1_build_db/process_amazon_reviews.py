@@ -15,7 +15,7 @@ Example Usage:
     python process_amazon_reviews.py --input_dir ./amz2023_raw --out_dir ./amz2023_processed
 """
 
-import argparse, os, json, csv, re, sqlite3, datetime
+import argparse, os, json, csv, re, sqlite3, datetime, html
 from typing import Any, Dict, Optional, Iterable
 import glob
 
@@ -39,6 +39,26 @@ REVIEW_COLUMNS = [
     "user_id", "review_ts", "helpful_vote", "verified_purchase",
     "marketplace", "category"
 ]
+
+# Reference: https://github.com/hyp1231/AmazonReviews2023/blob/main/product_search_results/dataset/process_esci.py
+def clean_text(raw_text):
+    if isinstance(raw_text, list):
+        cleaned_text = ' '.join(raw_text)
+    elif isinstance(raw_text, dict):
+        cleaned_text = str(raw_text)
+    else:
+        cleaned_text = raw_text
+    cleaned_text = html.unescape(cleaned_text)
+    cleaned_text = re.sub(r'["\n\r]*', '', cleaned_text)
+    index = -1
+    while -index < len(cleaned_text) and cleaned_text[index] == '.':
+        index -= 1
+    index += 1
+    if index == 0:
+        cleaned_text = cleaned_text + '.'
+    else:
+        cleaned_text = cleaned_text[:index] + '.'
+    return cleaned_text
 
 def read_jsonl(path: str) -> Iterable[Dict[str, Any]]:
     """
@@ -223,28 +243,15 @@ def normalize_meta(rec: Dict[str, Any], product_id: int) -> Dict[str, Any]:
     Returns:
         A new dictionary with fields matching META_COLUMNS.
     """
-    # The 'description' field can be a list of paragraphs or a single string.
-    # We join lists into a single text block.
-    desc = rec.get("description")
-    product_description = None
-    if isinstance(desc, list):
-        product_description = "\n".join([str(x) for x in desc if x is not None])
-    elif isinstance(desc, dict):
-        # If it's a dict, store as JSON
-        product_description = to_json_text(desc)
-    elif desc is not None:
-        product_description = str(desc)
-    parent_asin = rec.get("parent_asin")
-
     out = {
         "product_id": product_id,
         "parent_asin": rec.get("parent_asin"),
         "main_category": rec.get("main_category"),
-        "product_title": rec.get("title"),
+        "product_title": clean_text(rec.get("title")),
         "average_rating": to_float(rec.get("average_rating")),
         "rating_number": to_int(rec.get("rating_number")),
         "features_json": to_json_text(rec.get("features")),
-        "product_description": product_description,
+        "product_description": clean_text(rec.get("description")),
         "price": parse_price(rec.get("price")),
         "images_json": to_json_text(rec.get("images")),
         "videos_json": to_json_text(rec.get("videos")),
@@ -273,8 +280,8 @@ def normalize_review(rec: Dict[str, Any]) -> Dict[str, Any]:
     out = {
         "parent_asin": rec.get("parent_asin"),
         "rating": to_float(rec.get("rating")),
-        "review_title": rec.get("title"),
-        "review_text": rec.get("text"),
+        "review_title": clean_text(rec.get("title")),
+        "review_text": clean_text(rec.get("text")),
         "images_json": to_json_text(rec.get("images")),
 
         # Handle multiple possible keys for the same data
