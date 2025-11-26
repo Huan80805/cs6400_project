@@ -140,7 +140,7 @@ def main():
     QUERY_EMBEDDINGS_PATH = "query_embeddings.parquet"
 
     K_GOAL = 1
-    M_FACTOR = 100  # large over-fetch factor for postfiltering
+    M_FACTOR = 1000  # large over-fetch factor for postfiltering
     K_FETCH = K_GOAL * M_FACTOR
 
     SELECTIVITY_TARGETS = [
