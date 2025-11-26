@@ -136,9 +136,8 @@ def build_filter_from_spec(spec: dict[str, Any]) -> dict[str, Any]:
 
 def main():
     DB_PATH = "amz.db"
-    EMBEDDINGS_PATH = "embeddings.parquet"
+    EMBEDDINGS_PATH = "embeddings1.parquet"
     QUERY_EMBEDDINGS_PATH = "query_embeddings.parquet"
-    QUERY_BATCH_SIZE = 256
 
     K_GOAL = 1
     M_FACTOR = 100  # large over-fetch factor for postfiltering
@@ -180,7 +179,7 @@ def main():
         sorted_texts = [query_texts[i] for i in sorted_indices]
 
         all_query_vectors_sorted = encoder.encode_queries_in_batches(
-            sorted_texts, batch_size=QUERY_BATCH_SIZE
+            sorted_texts
         )
         print("Query encoding complete.")
 
@@ -224,7 +223,6 @@ def main():
                 filter_suite, target_percent, selectivity_range
             )
             dynamic_filter = build_filter_from_spec(selected_spec)
-
             if not dynamic_filter:
                 continue
 
@@ -255,7 +253,9 @@ def main():
 
             if is_hit:
                 hits += 1
-
+            
+        if total_queries == 0:
+            print(f"Warning: No queries processed for level {level_name}. Check if filters exist.")
         recall = (hits / total_queries) if total_queries > 0 else 0
         avg_result_set_size = np.mean(result_set_size) if result_set_size else 0
         avg_latency = np.mean(latencies_ms) if latencies_ms else 0

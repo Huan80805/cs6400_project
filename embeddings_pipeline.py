@@ -7,17 +7,14 @@ Implements the embedding plan from the project proposal:
 • Per-chunk embeddings via mean pooling
 • Vector aggregation across chunks by element-wise average
 • Final L2 normalization
-• Output written as sharded .npz files (ids, asins, vectors)
+• Output written as sharded .npz files (asins, vectors)
 
 Quick start to run
 -----------
 python embeddings_pipeline.py \
   --db /path/to/amazon.sqlite \
   --out_dir ./emb_shards \
-  --batch_size 64 \
   --page_size 512 \
-  --max_length 64 \
-  --stride 10 \
   --topk_reviews 20 \
   --min_chars 20 \
   --categories All_Beauty Amazon_Fashion Appliances
@@ -29,7 +26,7 @@ python -m pip install torch transformers numpy tqdm
 python -m pip install pandas pyarrow
 
 """
-
+# TODO: input field for embedding is different for Amazon-C4 vs ESCI
 from __future__ import annotations
 import os
 import argparse
@@ -44,18 +41,17 @@ from tqdm import tqdm
 # Text building and chunking
 # -----------------------------
 
-
 def build_product_document(
     title: Optional[str],
     features_text: Optional[str],
     details_text: Optional[str],
     reviews: List[Tuple[str, str]],
     min_chars: int = 0,
+    description: str = None,
 ) -> Optional[str]:
     parts: List[str] = []
-    if title:
-        parts.append(str(title))
-    # Commented out to focus on only title, but even so the recall is bad
+    # if title:
+    #     parts.append(str(title))
     # if features_text:
     #     parts.append(str(features_text))
     # if details_text:
@@ -66,11 +62,19 @@ def build_product_document(
     #         parts.append(str(rt))
     #     if rx:
     #         parts.append(str(rx))
-    doc = "\n".join(p.strip() for p in parts if p and p.strip())
-    if len(doc) < min_chars:
-        return None
-    return doc
-
+    # doc = "\n".join(p.strip() for p in parts if p and p.strip())
+    # if len(doc) < min_chars:
+    #     return None
+    # return doc
+    # Reference: https://github.com/hyp1231/AmazonReviews2023/blob/main/product_search_results/dataset/process_esci.py#L52
+    # TODO: this is only for ESCI, need to adjust for Amazon-C4
+    meta_text = ''
+    if title:
+        meta_text += title + ' '
+    if description:
+        meta_text += description + ' '
+    meta_text = meta_text.replace('\t', ' ')
+    return meta_text
 
 # -----------------------------
 # Main pipeline
@@ -98,26 +102,23 @@ def run_pipeline(args: argparse.Namespace) -> None:
         if not rows:
             break
 
-        ids: List[int] = []
         asins: List[str] = []
         texts: List[str] = []
 
         for r in rows:
-            pid = int(r["product_id"]) if r["product_id"] is not None else None
             asin = r["parent_asin"] if r["parent_asin"] is not None else ""
             title = r["title"]
             features = r["features_text"]
             details = r["details_text"]
-
+            description = r["description"]
             # pull top-k reviews to augment text
             rv = db.fetch_topk_reviews(asin, args.topk_reviews) if asin else []
             doc = build_product_document(
-                title, features, details, rv, min_chars=args.min_chars
+                title, features, details, rv, min_chars=args.min_chars, description=description
             )
             if doc is None:
                 # skip if too short
                 continue
-            ids.append(pid)
             asins.append(asin)
             texts.append(doc)
 
@@ -129,17 +130,14 @@ def run_pipeline(args: argparse.Namespace) -> None:
 
         # Encode (1 vector per product)
         out_vecs = encoder.encode_documents_in_batches(
-            texts=texts,
-            max_length=args.max_length,
-            stride=args.stride,
+            texts=texts
         )
 
-        out_ids = np.asarray(ids, dtype=np.int64)
         out_asins = np.asarray(asins)
 
         shard_name = f"shard_{start}_{start + len(rows) - 1}_{shard_idx:05d}.npz"
         shard_path = os.path.join(args.out_dir, shard_name)
-        np.savez_compressed(shard_path, ids=out_ids, asins=out_asins, vectors=out_vecs)
+        np.savez_compressed(shard_path, asins=out_asins, vectors=out_vecs)
 
         shard_idx += 1
         start += len(rows)
@@ -167,7 +165,6 @@ def shards_to_parquet(shards_dir: str, out_parquet: str) -> None:
         if not fn.endswith(".npz"):
             continue
         data = np.load(os.path.join(shards_dir, fn))
-        ids = data["ids"]
         asins = data["asins"]
         vecs = data["vectors"]
         if dim is None:
@@ -175,7 +172,6 @@ def shards_to_parquet(shards_dir: str, out_parquet: str) -> None:
         dfs.append(
             pd.DataFrame(
                 {
-                    "product_id": ids,
                     "parent_asin": asins,
                     "vector": list(vecs),
                 }
@@ -192,11 +188,10 @@ def shards_to_parquet(shards_dir: str, out_parquet: str) -> None:
     arr_list = pa.FixedSizeListArray.from_arrays(arr_values, list_size=dim)
     table = pa.Table.from_arrays(
         [
-            pa.array(df["product_id"].values),
             pa.array(df["parent_asin"].values),
             arr_list,
         ],
-        names=["product_id", "parent_asin", "vector"],
+        names=["parent_asin", "vector"],
     )
 
     pq.write_table(table, out_parquet)
@@ -212,46 +207,23 @@ def parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="CS6400 Embedding Pipeline — BLAIR")
     p.add_argument("--db", required=True, help="Path to SQLite database file")
     p.add_argument("--out_dir", required=True, help="Directory to write .npz shards")
-    p.add_argument(
-        "--categories",
-        nargs="*",
-        default=None,
-        help="Optional main_category filter list",
+    p.add_argument( 
+        "--categories", nargs="*", default=None, help="Optional main_category filter list",
     )
-
     p.add_argument(
         "--page_size", type=int, default=1024, help="Products fetched per page"
     )
-    p.add_argument("--offset", type=int, default=0, help="Starting row offset")
-
     p.add_argument(
-        "--batch_size", type=int, default=64, help="Chunk batch size for model forward"
+        "--offset", type=int, default=0, help="Starting row offset"
     )
     p.add_argument(
-        "--max_length", type=int, default=64, help="Max tokens per chunk (proposal: 64)"
+        "--topk_reviews", type=int, default=5, help="Max number of reviews to append per product",
     )
     p.add_argument(
-        "--stride", type=int, default=10, help="Token overlap between chunks"
-    )
-
-    p.add_argument(
-        "--topk_reviews",
-        type=int,
-        default=5,
-        help="Max number of reviews to append per product",
+        "--min_chars", type=int, default=20, help="Drop products with document shorter than this",
     )
     p.add_argument(
-        "--min_chars",
-        type=int,
-        default=20,
-        help="Drop products with document shorter than this",
-    )
-
-    p.add_argument(
-        "--parquet",
-        type=str,
-        default=None,
-        help="If set, convert shards to this Parquet file at end",
+        "--parquet", type=str, default=None, help="If set, convert shards to this Parquet file at end",
     )
     return p.parse_args(argv)
 

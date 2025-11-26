@@ -4,11 +4,11 @@ Reads a JSON file containing product filters and updates the 'products'
 table in the SQLite database.
 
 The JSON file is expected to be a list of objects, where each object
-has at least a "product_id" and a "filters" key.
+has at least a "parenta_asin" and a "filters" key.
 
 [
     {
-       "product_id": 123,
+       "parent_asin": 123,
        "filters": [{"filter_column": "main_category",...}]
     },
 ]
@@ -50,23 +50,21 @@ def load_filters_to_db(db_path: str, json_path: str, batch_size: int = 5000):
 
     print(f"Loaded {len(data)} product filter entries.")
 
-    # Prepare data for executemany
-    # (json_string, product_id)
     update_params = []
     for item in data:
-        if "product_id" not in item or "filters" not in item:
+        if "parent_asin" not in item or "filters" not in item:
             print(
-                f"Warning: Skipping item without 'product_id' or 'filters': {item}",
+                f"Warning: Skipping item without 'parent_asin' or 'filters': {item}",
                 file=sys.stderr,
             )
             continue
 
         try:
-            product_id = int(item["product_id"])
+            parent_asin = str(item["parent_asin"])  # Ensure ASIN is string
             filters_list = item["filters"]
             # Convert the list of filters to a single JSON string
             filters_json = json.dumps(filters_list)
-            update_params.append((filters_json, product_id))
+            update_params.append((parent_asin, filters_json))
         except Exception as e:
             print(
                 f"Warning: Skipping item due to processing error: {e} | Item: {item}",
@@ -89,17 +87,41 @@ def load_filters_to_db(db_path: str, json_path: str, batch_size: int = 5000):
         cur.execute("PRAGMA journal_mode=WAL;")
         cur.execute("PRAGMA synchronous=NORMAL;")
 
+        # Clear existing filters
+        print("Clearing existing product_filters table...")
+        cur.execute("DELETE FROM product_filters")
+        conn.commit()
+
+        # Get mapping from parent_asin to product_id
+        print("Fetching product_id mapping...")
+        cur.execute("SELECT parent_asin, product_id FROM products")
+        asin_to_id = {row[0]: row[1] for row in cur.fetchall()}
+        print(f"Loaded {len(asin_to_id)} product mappings.")
+
+        # Prepare data with correct product_id
+        final_params = []
+        skipped_count = 0
+        for asin, filters_json in update_params:
+            # asin is already a string from the JSON parsing loop below
+            if asin in asin_to_id:
+                final_params.append((asin_to_id[asin], filters_json))
+            else:
+                skipped_count += 1
+        
+        if skipped_count > 0:
+            print(f"Warning: {skipped_count} filters skipped because ASIN not found in products table.")
+
+        # insert into product_filters table
         update_query = """
-            UPDATE products
-            SET filters_json = ?
-            WHERE product_id = ?
+            INSERT INTO product_filters (product_id, filters_json)
+            VALUES (?, ?)
         """
 
         # Use executemany in batches
         for i in tqdm(
-            range(0, len(update_params), batch_size), desc="Updating DB batches"
+            range(0, len(final_params), batch_size), desc="Updating DB batches"
         ):
-            batch = update_params[i : i + batch_size]
+            batch = final_params[i : i + batch_size]
             cur.executemany(update_query, batch)
             conn.commit()
 

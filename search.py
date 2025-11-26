@@ -14,7 +14,7 @@ class Search:
         print("starting search init")
         self.db = db
         self.encoder = encoder
-        self.vector_store = VectorStore(path=parquet_path)
+        self.vector_store = VectorStore(path=parquet_path, db=db)
         # All in-memory, should probably persist
         print("before index init")
         self.index: Optional[faiss.IndexIDMap] = None
