@@ -14,8 +14,43 @@ from typing import Any, Optional
 from db import DB
 from encoder import Encoder
 from search import Search
+from roaring_index import RoaringIndex
 import json
 
+## Debugging
+# import sqlite3
+# import pandas as pd
+
+# emb = pd.read_parquet("embeddings1.parquet")
+# print("Embeddings rows:", len(emb))
+
+# conn = sqlite3.connect("amz.db")
+# prod = pd.read_sql("SELECT product_id, parent_asin FROM products", conn)
+# print("Products rows:", len(prod))
+
+# merged_emb = prod.merge(emb, on="parent_asin", how="inner")
+# print("Products with embeddings:", len(merged_emb))
+# print("Coverage of products:", len(merged_emb) / len(prod))
+
+# df = pd.read_parquet("embeddings1.parquet")
+# print("embeddings1.parquet:")
+# print("length of embeddings1.parquet:", len(df))
+# print(df.columns)
+# print(df.head())
+
+# df3 = pd.read_parquet("embeddings.parquet")
+# print("embeddings.parquet:")
+# print("length of embeddings.parquet:", len(df3))
+
+# df2 = pd.read_parquet("query_embeddings.parquet")
+# print("query_embeddings.parquet:")
+# print(df2.columns)
+# print(df2["ground_truth_product_ids"])
+# print(df2.head())
+
+# exit(0)
+
+## End debugging
 
 def save_query_embeddings(
     path: str, queries: list[tuple[str, str, str, str]], vectors: np.ndarray
@@ -140,7 +175,7 @@ def main():
     QUERY_EMBEDDINGS_PATH = "query_embeddings.parquet"
 
     K_GOAL = 1
-    M_FACTOR = 1000  # large over-fetch factor for postfiltering
+    M_FACTOR = 100  # large over-fetch factor for postfiltering
     K_FETCH = K_GOAL * M_FACTOR
 
     SELECTIVITY_TARGETS = [
@@ -154,7 +189,19 @@ def main():
     print("DB loaded.")
     encoder = Encoder()
     print("Encoder initialized.")
-    search = Search(db=db, encoder=encoder, parquet_path=EMBEDDINGS_PATH)
+    ROARING_PATH = "bitmaps.pkl"
+    roaring = RoaringIndex(ROARING_PATH)
+
+    # Debug show some keys
+    keys_list = list(roaring._bitmaps.keys())
+    print("RoaringIndex total keys:", len(keys_list))
+    print("First 10 bitmap keys:")
+    for k in keys_list[:10]:
+        print("  ", k)
+    ## Debug end
+
+    search = Search(db=db, encoder=encoder, parquet_path=EMBEDDINGS_PATH,
+                    roaring_index=roaring)
     print("building index...")
     search.build_index()
     # Build IVFPQ index as an additional ANN backend (new)
@@ -192,7 +239,21 @@ def main():
             (q[0], q[2], q[3] if q[3] else "[]") for q in sorted_queries
         ]
         all_query_vectors = all_query_vectors_sorted
-
+    
+    ## Debug
+    print("Example query filters from query_embeddings.parquet:")
+    import json as _json
+    for (qid, pid, filt_str) in qid_pid_filter_list[:3]:
+        print("qid:", qid, "pid:", pid)
+        print("  raw filters:", filt_str[:300])
+        try:
+            fl = _json.loads(filt_str)
+            if fl:
+                print("  first spec:", fl[0])
+        except Exception as e:
+            print("  JSON parse error:", e)
+    ## Debug end
+    
     all_results = []  # Store results for each level
 
     for level_name, target_percent, selectivity_range in SELECTIVITY_TARGETS:
@@ -390,8 +451,132 @@ def main():
 
     print("-" * 70)
 
-    db.close()
 
+    # ============================================
+    # Roaring bitmap post-filtering (new variant)
+    # ============================================
+    all_results_roaring = []
+
+    for level_name, target_percent, selectivity_range in SELECTIVITY_TARGETS:
+        latencies_ms = []
+        hits = 0
+        gtsims = []
+        total_queries = 0
+        result_set_size = []
+
+        for i in tqdm(
+            range(len(qid_pid_filter_list)),
+            desc=f"Evaluating Post-Filter (Roaring, ~{target_percent}%)",
+        ):
+            ## Debug
+            debug_done = False
+            ## Debug end
+
+            query_id, ground_truth_product_id_str, filters_json_string = (
+                qid_pid_filter_list[i]
+            )
+            ground_truth_product_id = int(ground_truth_product_id_str)
+
+            query_vector = all_query_vectors[i : i + 1, :]
+
+            try:
+                filter_suite = json.loads(filters_json_string)
+            except json.JSONDecodeError:
+                filter_suite = []
+
+            selected_spec = select_filter_by_selectivity(
+                filter_suite, target_percent, selectivity_range
+            )
+            dynamic_filter = build_filter_from_spec(selected_spec)
+
+            if not dynamic_filter:
+                continue
+            
+            ## Debug
+            if not debug_done:
+                # Show what we're about to ask Roaring for
+                print("\n[DEBUG] First Roaring filter in this run")
+                print("  selected_spec:", selected_spec)
+                print("  dynamic_filter:", dynamic_filter)
+
+                # Build the key exactly as RoaringIndex does
+                from bitmap_keys import make_key as _make_key
+                col, (op, val) = next(iter(dynamic_filter.items()))
+                debug_key = _make_key(col, op, val)
+                print("  constructed key:", debug_key)
+                print("  key in roaring._bitmaps? ->", debug_key in roaring._bitmaps)
+
+                debug_done = True
+            ## Debug end
+
+            total_queries += 1
+            start_time = time.perf_counter()
+
+            # NEW: Roaring-based post-filter
+            final_result_pids = search.postfilter_search_roaring(
+                query_vector=query_vector,
+                k=K_FETCH,
+                filter=dynamic_filter,
+            )
+
+            final_result_set = set(final_result_pids)
+            end_time = time.perf_counter()
+            latencies_ms.append((end_time - start_time) * 1000)
+            result_set_size.append(len(final_result_set))
+
+            gt_vector = search.vector_store.get_vector_by_product_id(
+                ground_truth_product_id
+            )
+            gt_sim = (
+                (query_vector @ gt_vector.T)[0, 0] if gt_vector is not None else -1.0
+            )
+            gtsims.append(gt_sim)
+
+            if ground_truth_product_id in final_result_set:
+                hits += 1
+
+        recall = (hits / total_queries) if total_queries > 0 else 0
+        avg_result_set_size = np.mean(result_set_size) if result_set_size else 0
+        avg_latency = np.mean(latencies_ms) if latencies_ms else 0
+        p95_latency = np.percentile(latencies_ms, 95) if latencies_ms else 0
+        avg_gt_sim = np.mean(gtsims) if gtsims else 0
+
+        all_results_roaring.append(
+            {
+                "level": level_name,
+                "target_selectivity": f"~{target_percent}%",
+                "total_queries": total_queries,
+                "hits": hits,
+                "recall": recall,
+                "avg_result_set_size": avg_result_set_size,
+                "avg_latency_ms": avg_latency,
+                "p95_latency_ms": p95_latency,
+                "average_cosine_similarity_between_query_vector_and_ground_truth_item": avg_gt_sim,
+            }
+        )
+
+    print("\n--- FINAL SUMMARY: POST-FILTERING BY SELECTIVITY (Roaring) ---")
+    print("-" * 70)
+    print(f"M_FACTOR (Overfetch): {M_FACTOR} (K_FETCH={K_FETCH})")
+    print(
+        f"{'Level':<18} | {'Recall':<8} | {'Avg Result Set Size':<8} | "
+        f"{'P95 Lat (ms)':<12} | {'Avg Lat (ms)':<12} | {'Hits':<5}"
+    )
+    print("-" * 70)
+
+    for metrics in all_results_roaring:
+        print(
+            f"{metrics['level']:<18} | {metrics['recall']:<8.4f} | "
+            f"{metrics['avg_result_set_size']:<5} | "
+            f"{metrics['p95_latency_ms']:<12.2f} | "
+            f"{metrics['avg_latency_ms']:<12.2f} | "
+            f"{metrics['hits']:<5}"
+        )
+    print("-" * 70)
+
+    db.close()
+    
+    
 
 if __name__ == "__main__":
     main()

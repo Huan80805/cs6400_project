@@ -7,10 +7,11 @@ from typing import List, Tuple, Dict, Set, Optional
 from db import DB
 from encoder import Encoder
 from vector_store import VectorStore
+from roaring_index import RoaringIndex
 
 
 class Search:
-    def __init__(self, db: DB, encoder: Encoder, parquet_path: str):
+    def __init__(self, db: DB, encoder: Encoder, parquet_path: str, roaring_index: Optional[RoaringIndex] = None):
         print("starting search init")
         self.db = db
         self.encoder = encoder
@@ -21,6 +22,8 @@ class Search:
         print("old init done")
         self.ivfpq_index: Optional[faiss.Index] = None
         print("finished search init")
+        self.roaring_index = roaring_index
+        print("roaring index set in search init")
 
     def build_index(self):
         start_time = time.time()
@@ -156,6 +159,33 @@ class Search:
 
         return results
     
+    def postfilter_search_roaring(
+        self,
+        query_vector: np.ndarray,
+        k: int,
+        filter: Dict,
+    ) -> list[int]:
+        """
+        Post-filtering using Roaring bitmaps instead of SQL:
+        1) vector search over the full index (Flat or IVFPQ),
+        2) intersect the candidate IDs with a Roaring bitmap for the filter.
+        """
+        assert self.index is not None, "Please call build_index() before searching."
+        assert self.roaring_index is not None, "RoaringIndex not configured."
+
+        distances, ids = self.index.search(query_vector, k)
+        candidate_ids = ids[0].tolist()
+
+        # Roaring: precomputed set of **allowed** product_ids for this filter
+        allowed_ids = self.roaring_index.get_ids_for_filter(filter)
+
+        results: list[int] = []
+        for pid in candidate_ids:
+            if pid in allowed_ids:
+                results.append(pid)
+
+        return results
+
     def prefilter_search(
         self, query_vector: np.ndarray, k: int, filter: Dict
     ) -> Optional[int]:

@@ -6,3 +6,4 @@ emb_shards/
 *.parquet
 __pycache__/
 embeddings.parquet
+debug_overlap.py
