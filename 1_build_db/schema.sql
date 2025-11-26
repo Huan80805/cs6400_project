@@ -1,5 +1,3 @@
--- schema.sql  (sqlite3 your.db < schema.sql)
-
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
 
@@ -39,8 +37,7 @@ CREATE TABLE products (
   bought_together_json TEXT,   -- JSON text
   brand                TEXT,
   color                TEXT,
-  product_locale       TEXT,
-  filters_json         TEXT
+  product_locale       TEXT
 );
 
 -- ESCI
@@ -56,12 +53,15 @@ CREATE TABLE esci_queries (
   large_version  INTEGER,
   split          TEXT      -- 'train' or 'test'
 );
+DROP TABLE IF EXISTS product_filters;
+CREATE TABLE product_filters (
+  product_id INTEGER PRIMARY KEY,
+  filters_json TEXT NOT NULL,
+  FOREIGN KEY (product_id) REFERENCES products(product_id)
+);
 
--- Indexes, can ignore?
+-- Indexes
 CREATE INDEX IF NOT EXISTS idx_reviews_asin     ON reviews(parent_asin);
-CREATE INDEX IF NOT EXISTS idx_reviews_ts      ON reviews(review_ts);
-CREATE INDEX IF NOT EXISTS idx_reviews_user    ON reviews(user_id);
-CREATE INDEX IF NOT EXISTS idx_meta_locale     ON products(product_locale);
 CREATE INDEX IF NOT EXISTS idx_meta_category   ON products(main_category);
 CREATE INDEX IF NOT EXISTS idx_esci_qid       ON esci_queries(query_id);
 CREATE INDEX IF NOT EXISTS idx_esci_pid       ON esci_queries(product_id);

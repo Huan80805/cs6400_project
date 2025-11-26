@@ -24,7 +24,7 @@ class DB:
         cur = self.conn.cursor()
         if categories:
             q = (
-                "SELECT product_id, parent_asin, main_category, product_title AS title, features_json AS features_text, details_json AS details_text\n"
+                "SELECT product_id, parent_asin, main_category, product_title AS title, features_json AS features_text, details_json AS details_text, product_description as description\n"
                 "FROM products\n"
                 f"WHERE main_category IN ({','.join(['?'] * len(categories))})\n"
                 "ORDER BY product_id ASC\n"
@@ -33,7 +33,7 @@ class DB:
             cur.execute(q, (*categories, limit, start))
         else:
             q = (
-                "SELECT product_id, parent_asin, main_category, product_title AS title, features_json AS features_text, details_json AS details_text\n"
+                "SELECT product_id, parent_asin, main_category, product_title AS title, features_json AS features_text, details_json AS details_text, product_description as description\n"
                 "FROM products\n"
                 "ORDER BY product_id ASC\n"
                 "LIMIT ? OFFSET ?"
@@ -68,22 +68,23 @@ class DB:
         if categories:
             cur.execute(
                 f"""
-                SELECT eq.query_id, eq.query, p.product_id, p.filters_json
+                SELECT eq.query_id, eq.query, p.product_id, pf.filters_json
                 FROM esci_queries eq
-                JOIN products p 
+                JOIN products p ON eq.product_id = p.parent_asin
                 ON eq.product_id  = p.parent_asin
-                WHERE esci_label = 'E' AND small_version = 1 AND p.main_category IN ({",".join(["?"] * len(categories))})
+                LEFT JOIN product_filters pf ON p.product_id = pf.product_id
+                WHERE esci_label = 'E' AND p.main_category IN ({",".join(["?"] * len(categories))})
                 """,
                 categories,
             )
         else:
             cur.execute(
                 """
-                SELECT eq.query_id, eq.query, p.product_id, p.filters_json
+                SELECT eq.query_id, eq.query, p.product_id, pf.filters_json
                 FROM esci_queries eq
-                JOIN products p 
-                ON eq.product_id  = p.parent_asin
-                WHERE esci_label = 'E' AND small_version = 1
+                JOIN products p ON eq.product_id = p.parent_asin
+                LEFT JOIN product_filters pf ON p.product_id = pf.product_id
+                WHERE esci_label = 'E'
                 """
             )
 

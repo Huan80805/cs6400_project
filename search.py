@@ -13,7 +13,7 @@ class Search:
     def __init__(self, db: DB, encoder: Encoder, parquet_path: str):
         self.db = db
         self.encoder = encoder
-        self.vector_store = VectorStore(path=parquet_path)
+        self.vector_store = VectorStore(path=parquet_path, db=db)
         # All in-memory, should probably persist
         self.index: Optional[faiss.IndexIDMap] = None
 
