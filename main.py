@@ -493,20 +493,20 @@ def main():
                 continue
             
             ## Debug
-            if not debug_done:
-                # Show what we're about to ask Roaring for
-                print("\n[DEBUG] First Roaring filter in this run")
-                print("  selected_spec:", selected_spec)
-                print("  dynamic_filter:", dynamic_filter)
+            # if not debug_done:
+            #     # Show what we're about to ask Roaring for
+            #     print("\n[DEBUG] First Roaring filter in this run")
+            #     print("  selected_spec:", selected_spec)
+            #     print("  dynamic_filter:", dynamic_filter)
 
-                # Build the key exactly as RoaringIndex does
-                from bitmap_keys import make_key as _make_key
-                col, (op, val) = next(iter(dynamic_filter.items()))
-                debug_key = _make_key(col, op, val)
-                print("  constructed key:", debug_key)
-                print("  key in roaring._bitmaps? ->", debug_key in roaring._bitmaps)
+            #     # Build the key exactly as RoaringIndex does
+            #     from bitmap_keys import make_key as _make_key
+            #     col, (op, val) = next(iter(dynamic_filter.items()))
+            #     debug_key = _make_key(col, op, val)
+            #     print("  constructed key:", debug_key)
+            #     print("  key in roaring._bitmaps? ->", debug_key in roaring._bitmaps)
 
-                debug_done = True
+            #     debug_done = True
             ## Debug end
 
             total_queries += 1
