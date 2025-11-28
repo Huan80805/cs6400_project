@@ -12,3 +12,4 @@ debug*
 bitmaps.pkl
 bitmaps_old.pkl
 query_embeddings.parquet
+main_backup.py

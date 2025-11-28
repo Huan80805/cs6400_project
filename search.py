@@ -11,7 +11,13 @@ from roaring_index import RoaringIndex
 
 
 class Search:
-    def __init__(self, db: DB, encoder: Encoder, parquet_path: str, roaring_index: Optional[RoaringIndex] = None):
+    def __init__(
+        self,
+        db: DB,
+        encoder: Encoder,
+        parquet_path: str,
+        roaring_index: Optional[RoaringIndex] = None,
+    ):
         print("starting search init")
         self.db = db
         self.encoder = encoder
@@ -24,6 +30,10 @@ class Search:
         print("finished search init")
         self.roaring_index = roaring_index
         print("roaring index set in search init")
+
+    # ------------------------------------------------------------------
+    # Index building
+    # ------------------------------------------------------------------
 
     def build_index(self):
         start_time = time.time()
@@ -41,7 +51,6 @@ class Search:
         )
 
         end_time = time.time()
-
         print(f"Index build time: {end_time - start_time:.2f} seconds")
 
     def build_ivfpq_index(
@@ -58,11 +67,6 @@ class Search:
 
         This does NOT change self.index (FlatL2); it populates self.ivfpq_index
         so you can compare FlatL2 vs IVFPQ side by side.
-        nlist - Number of coarse clusters (inverted lists): more lists = finer partitioning and potentially faster search at the cost of a heavier index and training.
-        m - Number of PQ subquantizers: controls how many equal sub-vectors each embedding is split into, trading off code length (memory/compute) vs quantization accuracy.
-        nbits - Bits per subquantizer: sets how many centroids each subspace can use (e.g., 8 bits → 256 centroids), with more bits giving higher accuracy but slightly more memory and training cost.
-        train_size - Number of vectors used to train the IVF and PQ codebooks: larger samples yield better centroids but increase training time.
-        nprobe - Number of inverted lists probed per query at search time: higher values improve recall by scanning more clusters but increase latency.
         """
         start_time = time.time()
 
@@ -114,6 +118,25 @@ class Search:
         end_time = time.time()
         print(f"Index build time (IVFPQ): {end_time - start_time:.2f} seconds")
 
+    # ------------------------------------------------------------------
+    # 0) Empty prefilter (no filter at all, flat index)
+    # ------------------------------------------------------------------
+
+    def search_unfiltered_flat(
+        self,
+        query_vector: np.ndarray,
+        k: int,
+    ) -> list[int]:
+        """
+        Baseline: no filter, exact ANN over the full flat index.
+        """
+        assert self.index is not None, "Please call build_index() before searching."
+        distances, ids = self.index.search(query_vector, k)
+        return [int(pid) for pid in ids[0] if pid != -1]
+
+    # ------------------------------------------------------------------
+    # 1) Raw postfilter: Flat ANN → SQL filter
+    # ------------------------------------------------------------------
 
     def postfilter_search(
         self,
@@ -127,12 +150,16 @@ class Search:
         candidate_ids = ids[0].tolist()
 
         filtered_allowed_set = self.db.get_filtered_ids(candidate_ids, filter)
-        results = []
+        results: list[int] = []
         for pid in candidate_ids:
             if pid in filtered_allowed_set:
                 results.append(pid)
 
         return results
+
+    # ------------------------------------------------------------------
+    # 2) IVFPQ postfilter: IVFPQ ANN → SQL filter
+    # ------------------------------------------------------------------
 
     def postfilter_search_ivfpq(
         self,
@@ -152,13 +179,17 @@ class Search:
         candidate_ids = ids[0].tolist()
 
         filtered_allowed_set = self.db.get_filtered_ids(candidate_ids, filter)
-        results = []
+        results: list[int] = []
         for pid in candidate_ids:
             if pid in filtered_allowed_set:
                 results.append(pid)
 
         return results
-    
+
+    # ------------------------------------------------------------------
+    # 3) Roaring bitmap postfilter: Flat ANN → Roaring filter
+    # ------------------------------------------------------------------
+
     def postfilter_search_roaring(
         self,
         query_vector: np.ndarray,
@@ -167,7 +198,7 @@ class Search:
     ) -> list[int]:
         """
         Post-filtering using Roaring bitmaps instead of SQL:
-        1) vector search over the full index (Flat or IVFPQ),
+        1) vector search over the full flat index,
         2) intersect the candidate IDs with a Roaring bitmap for the filter.
         """
         assert self.index is not None, "Please call build_index() before searching."
@@ -177,7 +208,7 @@ class Search:
         candidate_ids = ids[0].tolist()
 
         # Roaring: precomputed set of **allowed** product_ids for this filter
-        allowed_ids = self.roaring_index.get_ids_for_filter(filter)
+        allowed_ids = self.roaring_index.get_ids_for_filter(filter)  # Set[int]
 
         results: list[int] = []
         for pid in candidate_ids:
@@ -186,18 +217,26 @@ class Search:
 
         return results
 
-    def prefilter_search(
-        self, query_vector: np.ndarray, k: int, filter: Dict
-    ) -> Optional[int]:
+    # ------------------------------------------------------------------
+    # 4) IVFPQ + Roaring postfilter: IVFPQ ANN → Roaring filter
+    # ------------------------------------------------------------------
+
+    def postfilter_search_ivfpq_roaring(
+        self,
+        query_vector: np.ndarray,
+        k: int,
+        filter: Dict,
+    ) -> list[int]:
         """
-        Returns the single top product_id that matches, or None.
+        1) Global IVFPQ ANN over all vectors
+        2) Post-filter the candidate IDs using Roaring bitmaps
         """
+        assert self.ivfpq_index is not None, "Please call build_ivfpq_index() first."
+        assert self.roaring_index is not None, "RoaringIndex not configured."
 
-        # get all ids matching filter
+        distances, ids = self.ivfpq_index.search(query_vector, k)
+        candidate_ids = ids[0].tolist()
 
-        # get all vectors matching these ids
+        allowed_ids = self.roaring_index.get_ids_for_filter(filter)  # Set[int]
 
-        # construct index from the vectors (on-the-fly for each query)
-
-        # search
-        return None
+        return [pid for pid in candidate_ids if pid in allowed_ids]
