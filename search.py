@@ -18,18 +18,13 @@ class Search:
         parquet_path: str,
         roaring_index: Optional[RoaringIndex] = None,
     ):
-        print("starting search init")
         self.db = db
         self.encoder = encoder
         self.vector_store = VectorStore(path=parquet_path, db=db)
         # All in-memory, should probably persist
-        print("before index init")
         self.index: Optional[faiss.IndexIDMap] = None
-        print("old init done")
         self.ivfpq_index: Optional[faiss.Index] = None
-        print("finished search init")
         self.roaring_index = roaring_index
-        print("roaring index set in search init")
 
     # ------------------------------------------------------------------
     # Index building

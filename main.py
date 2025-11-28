@@ -150,21 +150,11 @@ def main():
         ("Mid (10-50%)", 10.0, (10.0, 50.0)),
         ("High (>50%)", 50.0, (50.0, 101.0)),  # Use 101 to be inclusive
     ]
-    print("in main")
     db = DB(path=DB_PATH)
-    print("DB loaded.")
     encoder = Encoder()
-    print("Encoder initialized.")
     ROARING_PATH = "bitmaps.pkl"
     roaring = RoaringIndex(ROARING_PATH)
 
-    # Debug show some keys
-    keys_list = list(roaring._bitmaps.keys())
-    print("RoaringIndex total keys:", len(keys_list))
-    print("First 10 bitmap keys:")
-    for k in keys_list[:10]:
-        print("  ", k)
-    ## Debug end
 
     search = Search(db=db, encoder=encoder, parquet_path=EMBEDDINGS_PATH,
                     roaring_index=roaring)
@@ -205,20 +195,6 @@ def main():
             (q[0], q[2], q[3] if q[3] else "[]") for q in sorted_queries
         ]
         all_query_vectors = all_query_vectors_sorted
-
-    ## Debug
-    print("Example query filters from query_embeddings.parquet:")
-    import json as _json
-    for (qid, pid, filt_str) in qid_pid_filter_list[:3]:
-        print("qid:", qid, "pid:", pid)
-        print("  raw filters:", filt_str[:300])
-        try:
-            fl = _json.loads(filt_str)
-            if fl:
-                print("  first spec:", fl[0])
-        except Exception as e:
-            print("  JSON parse error:", e)
-    ## Debug end
 
     # ============================================================
     # 1) Raw postfilter: Flat ANN → SQL filter
