@@ -18,6 +18,11 @@ python 1_build_db/process_queries.py --query_file esci-data/shopping_queries_dat
 sqlite3 amz.db < 1_build_db/load_queries.txt
 ```
 
+## Build roaring bitmaps
+```bash
+python build_bitmaps.py --db amz.db --filters_json ./1_build_db/esci_filters_deduplicated.json --out bitmaps.pkl
+```
+
 ## Running Evaluation
 Download the product embedding (it takes a long while to generate them!): https://drive.google.com/file/d/1KPoeD8GW1MQpohbAI0lnNcLdxhhtt3hw/view?usp=sharing
 Save it as ./embeddings.parquet
@@ -30,3 +35,41 @@ python main.py
 - Separate filters from product table (otherwise, most of them are null vals)
 - Amazon C4 queries
 - **THE FILTER'S PRODUCT_ID DOESN'T MATCH PRODUCT's PRODUCT_ID, USE PARENT ASIN TO REMAP!!! (LIKELY BECAUSE PRODUCTS TABLE ARE REBUILT)**
+
+## Some notes regarding IVFPQ, Roaring Bitmaps, and Baseline evaluation pipeline (Jonathan)
+Feel free to delete this from the README after the info needed for code refactoring / report is extracted.
+### General
+Right now, four methods are being evaluated:
+1. Postfilter baseline (Basic index ANN -> SQL filtering)
+2. Postfilter w/ IVFPQ (IVFPQ ANN -> SQL filtering)
+3. Postfilter w/ Roaring bitmap (Basic index ANN -> Roaring bitmap filtering)
+4. IVFPQ + Roaring bitmap pipeline (IVFPQ ANN -> Roaring bitmap filtering)
+5. (not added) We should probably add prefiltering back as a baseline between 1 and 2. 
+- Note: I personally think it doesn't make sense to use IVFPQ combined with a prefiltering method, i.e. no SQL filtering -> IVFPQ ANN or Roaring bitmap filtering -> IVFPQ ANN, due to the need to rebuild the IVFPQ index over the filtered items (building is relatively costly, and amortized into query time is still pretty bad). This note might not need to be listed in the report, idk.
+- IVFPQ: I think the IVFPQ parameters / implementation follow the midterm report or normal usage quite well. Not too much to add except for parameters.
+- Roaring bitmaps: Assumes knowledge of filters but not query set items. The way we actually do this is pull all filters from esci_filters_deduplicated.json, and add each filter as a key. For each key, the corresponding value is a representation of product ids (within all of amz.db) that satsify that filter. During evaluation, a filter query is then done by directly pulling the product ids from said representation / bitmap. Note that "knowledge of filters" is quite a strong assumption and this is more a theoretical analysis on what we could do if we knew "all" the hot filter ranges or values (not dealing with fall back to SQL queries on a "missing" filter). Realistically, we would build Roaring bitmaps to save key ranges for numerical fields / hot text queries, and use roaring bitmaps to remove certain elements from the potential set and follow this up with a SQL filter on a smaller set. However, we are trying to analyze the effects of pushing the assumption to the limit and seeing how this effects latency.
+### File functionality:
+- main.py: driver that bundles the methods in search.py to evaluate
+- search.py: bulk of the four hybrid query methods' logic
+- roaring bitmap related:
+    - bitmap_keys.py: defines a canonical string key format for predicates (column, op, value)
+    - build_bitmaps.py: offline step - driver that builds bitmaps.pkl
+    - roaring_index.py: online step - bitmap lookup
+### Results on local machine / discussion
+The final results put in the report should be taken from the formal evaluation, but I think the trends and important points will likely be similar.
+- Results: fetch 100
+![alt text](local_results/image_100.png)
+- Results: fetch 1000
+![alt text](local_results/image_1000.png)
+- Prefilter has high recall but large latency (as expected and demonstrated in the midterm checkpoint).
+- Recall / latency tradeoff observed between using IVFPQ vs Flat index. This is new compared to the midterm checkpoint, but expected. The recall drops off because IVFPQ essentially indexes and runs ANN on a compressed version of the embedding vectors. This same reasoning explains the increase in speed.
+- The recall is identical from using roaring bitmaps versus SQL filter as expected. Logically, these two do the same thing, except the roaring bitmap is like an "inverse", saving ids against filter values rather than filtering on SQL table values in ranges / equivalence / substrings.
+- Interesting pattern where for fine selectivity (~0.1%), Roaring outperforms SQL filters, but for higher selectivity it either is roughly equal or worse in latency. I think this is because of the fact that though "getting the bitmap from the key corresponding to the filter" takes the same time for any given filter, "getting the elements from the bitmap" takes longer for bitmaps containing more ids. Hence the latency is positively correlated to the number of ids allowed by the filter.
+- It makes sense to run prefiltering if we want high recall and don't care about latency. Run IVFPQ ANN + SQL filtering if we want speed at coarse selectivity, and run IVFPQ ANN + Roaring Bitmap filtering at fine selectivity. (Might want to unify the wording for selectivity levels.)
+### Potential TODOs during code refactoring / formal evaluation
+- Add prefilter evaluation back into main and search.py
+- Refactor main.py to take arguments and tune overfetch parameters individually (optional, only if you want to do it)
+- Time / evaluate everything once on PACE or consistent env
+    - Evaluate the five methods in "General" with overfetch 100 and 1000 respectively
+    - Time building the roaring bitmaps along with the ANN indexes
+

@@ -5,3 +5,11 @@ amz.db*
 emb_shards/
 *.parquet
 __pycache__/
+embeddings.parquet
+embeddings1.parquet
+debug_overlap.py
+debug*
+bitmaps.pkl
+bitmaps_old.pkl
+query_embeddings.parquet
+main_backup.py
