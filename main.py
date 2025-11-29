@@ -321,7 +321,7 @@ def main():
     search.build_index()
     # Build IVFPQ index as an additional ANN backend (new)
     print("built index, now building IVFPQ index...")
-    # search.build_ivfpq_index()
+    search.build_ivfpq_index()
     print("IVFPQ index build complete.")
 
     if os.path.exists(QUERY_EMBEDDINGS_PATH):
