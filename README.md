@@ -27,15 +27,17 @@ python 1_build_db/load_filters.py --db amz.db --json 1_build_db/amz_c4_filters.j
 
 ## Build roaring bitmaps
 ```bash
-python build_bitmaps.py --db amz.db --filters_json ./1_build_db/esci_filters_deduplicated.json --out bitmaps.pkl
+python build_bitmaps.py --db amz.db --filters_json ./1_build_db/esci_filters.json --out bitmaps_esci.pkl
 ```
 
 ## Running Evaluation
 Download the product embedding (it takes a long while to generate them!): https://drive.google.com/file/d/1KPoeD8GW1MQpohbAI0lnNcLdxhhtt3hw/view?usp=sharing
 Save it as ./embeddings.parquet
 ```bash
-python main.py
+python main.py --dataset [esci, amazon_c4]
 ```
+## TODO
+- Prefiltering (+IVFPQ, Roaring bitmaps)
 
 ## Some notes regarding IVFPQ, Roaring Bitmaps, and Baseline evaluation pipeline (Jonathan)
 Feel free to delete this from the README after the info needed for code refactoring / report is extracted.
