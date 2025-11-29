@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
 """
-Reads a JSON file containing product filters and updates the 'products'
-table in the SQLite database.
+Reads a JSON file containing product filters and inserts into the
+specified filter table in the SQLite database.
 
 The JSON file is expected to be a list of objects, where each object
-has at least a "parenta_asin" and a "filters" key.
+has at least a "parent_asin" and a "filters" key.
 
 [
     {
-       "parent_asin": 123,
+       "parent_asin": "B00XXXXX",
        "filters": [{"filter_column": "main_category",...}]
     },
 ]
 
 Usage:
-    python load_filters.py --db amz.db --json filters_deduplicated.json
+    # For ESCI filters
+    python load_filters.py --db amz.db --json esci_filters.json --table esci_filters
+    
+    # For Amazon-C4 filters
+    python load_filters.py --db amz.db --json amz_c4_filters.json --table amz_c4_filters
 """
 
 import sqlite3
@@ -23,11 +27,19 @@ import argparse
 import sys
 from tqdm import tqdm
 
+# Valid filter table names
+VALID_TABLES = {"esci_filters", "amz_c4_filters"}
 
-def load_filters_to_db(db_path: str, json_path: str, batch_size: int = 5000):
+
+def load_filters_to_db(db_path: str, json_path: str, table_name: str, batch_size: int = 5000):
     """
-    Connects to the DB and updates product rows with filter data.
+    Connects to the DB and inserts filter data into the specified table.
     """
+    # Validate table name to prevent SQL injection
+    if table_name not in VALID_TABLES:
+        print(f"Error: Invalid table name '{table_name}'. Must be one of: {VALID_TABLES}", file=sys.stderr)
+        return
+    
     try:
         with open(json_path, "r", encoding="utf-8") as f:
             print(f"Loading data from {json_path}...")
@@ -87,9 +99,9 @@ def load_filters_to_db(db_path: str, json_path: str, batch_size: int = 5000):
         cur.execute("PRAGMA journal_mode=WAL;")
         cur.execute("PRAGMA synchronous=NORMAL;")
 
-        # Clear existing filters
-        print("Clearing existing product_filters table...")
-        cur.execute("DELETE FROM product_filters")
+        # Clear existing filters in the target table
+        print(f"Clearing existing {table_name} table...")
+        cur.execute(f"DELETE FROM {table_name}")
         conn.commit()
 
         # Get mapping from parent_asin to product_id
@@ -111,9 +123,9 @@ def load_filters_to_db(db_path: str, json_path: str, batch_size: int = 5000):
         if skipped_count > 0:
             print(f"Warning: {skipped_count} filters skipped because ASIN not found in products table.")
 
-        # insert into product_filters table
-        update_query = """
-            INSERT INTO product_filters (product_id, filters_json)
+        # insert into the specified filter table
+        update_query = f"""
+            INSERT INTO {table_name} (product_id, filters_json)
             VALUES (?, ?)
         """
 
@@ -156,6 +168,12 @@ def parse_args() -> argparse.Namespace:
         help="Path to the filters JSON file (e.g., filters.json)",
     )
     parser.add_argument(
+        "--table",
+        required=True,
+        choices=["esci_filters", "amz_c4_filters"],
+        help="Target filter table name",
+    )
+    parser.add_argument(
         "--batch_size",
         type=int,
         default=5000,
@@ -166,4 +184,4 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = parse_args()
-    load_filters_to_db(args.db, args.json, args.batch_size)
+    load_filters_to_db(args.db, args.json, args.table, args.batch_size)

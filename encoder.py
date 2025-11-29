@@ -1,8 +1,7 @@
 # encoder.py
-# Unified, alignment-safe encoder for queries and documents.
-# - Queries: batched -> CLS token -> single L2 norm
-# - Docs: overflow chunking -> CLS token per chunk -> element-wise average -> single L2 norm
-# Supports CUDA / MPS / CPU. Returns float32 numpy arrays.
+# Unified encoder for queries and documents.
+# - Queries: batched -> CLS token  (-> single L2 norm)
+# - Docs: truncation -> CLS token per doc (-> single L2 norm)
 
 from __future__ import annotations
 from dataclasses import dataclass

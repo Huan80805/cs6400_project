@@ -40,7 +40,7 @@ CREATE TABLE products (
   product_locale       TEXT
 );
 
--- ESCI
+-- Queries
 DROP TABLE IF EXISTS esci_queries;
 CREATE TABLE esci_queries (
   example_id     TEXT,
@@ -53,18 +53,45 @@ CREATE TABLE esci_queries (
   large_version  INTEGER,
   split          TEXT      -- 'train' or 'test'
 );
-DROP TABLE IF EXISTS product_filters;
-CREATE TABLE product_filters (
+
+DROP TABLE IF EXISTS amz_c4_queries;
+CREATE TABLE amz_c4_queries (
+  query_id       TEXT,
+  query          TEXT,
+  product_id     TEXT,
+  user_id        TEXT,
+  ori_rating     REAL,
+  ori_review     TEXT
+);
+
+-- Filters
+DROP TABLE IF EXISTS esci_filters;
+CREATE TABLE esci_filters (
   product_id INTEGER PRIMARY KEY,
   filters_json TEXT NOT NULL,
   FOREIGN KEY (product_id) REFERENCES products(product_id)
 );
 
+DROP TABLE IF EXISTS amz_c4_filters;
+CREATE TABLE amz_c4_filters (
+  product_id INTEGER PRIMARY KEY,
+  filters_json TEXT NOT NULL,
+  FOREIGN KEY (product_id) REFERENCES products(product_id)
+);
+
+-- Legacy table
+DROP TABLE IF EXISTS product_filters;
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_reviews_asin     ON reviews(parent_asin);
 CREATE INDEX IF NOT EXISTS idx_meta_category   ON products(main_category);
+CREATE INDEX IF NOT EXISTS idx_pid  ON products(product_id);
+CREATE INDEX IF NOT EXISTS idx_esci_filters  ON esci_filters(product_id);
+CREATE INDEX IF NOT EXISTS idx_amz_c4_filters  ON amz_c4_filters(product_id);
 CREATE INDEX IF NOT EXISTS idx_esci_qid       ON esci_queries(query_id);
 CREATE INDEX IF NOT EXISTS idx_esci_pid       ON esci_queries(product_id);
+CREATE INDEX IF NOT EXISTS idx_amz_c4_qid     ON amz_c4_queries(query_id);
+CREATE INDEX IF NOT EXISTS idx_amz_c4_pid     ON amz_c4_queries(product_id);
 
 
 

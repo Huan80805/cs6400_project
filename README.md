@@ -1,5 +1,5 @@
 ## Build Database
-1. Clone the query data:
+1. Clone the ESCI query data:
 ```bash
 git clone https://github.com/amazon-science/esci-data.git # remember to enable lfs
 ```
@@ -9,32 +9,35 @@ git clone https://github.com/amazon-science/esci-data.git # remember to enable l
 python 1_build_db/process_amazon_reviews.py --input_dir ./amz2023_raw --out_dir ./amz2023_processed # this will process meta and review files into csv
 sqlite3 amz.db < 1_build_db/schema.sql
 sqlite3 amz.db < 1_build_db/load_amz.txt
-python 1_build_db/load_filters.py --db amz.db --json 1_build_db/esci_filters_deduplicated.json
 ```
-4. Filter queries and load into DB  
+4. Preprocess queries and load into DB  
 > note: this will apply product subset filters and langauge filters (English).
 ```bash
 python 1_build_db/process_queries.py --query_file esci-data/shopping_queries_dataset/shopping_queries_dataset_examples.parquet --db amz.db
+python 1_build_db/process_queries.py --query_file McAuley-Lab/Amazon-C4 --db amz.db
 sqlite3 amz.db < 1_build_db/load_queries.txt
+```
+5. Load pre-built filters into DB
+```bash
+# Load ESCI filters
+python 1_build_db/load_filters.py --db amz.db --json 1_build_db/esci_filters.json --table esci_filters
+# Load Amazon-C4 filters
+python 1_build_db/load_filters.py --db amz.db --json 1_build_db/amz_c4_filters.json --table amz_c4_filters
 ```
 
 ## Build roaring bitmaps
 ```bash
-python build_bitmaps.py --db amz.db --filters_json ./1_build_db/esci_filters_deduplicated.json --out bitmaps.pkl
+python build_bitmaps.py --db amz.db --filters_json ./1_build_db/esci_filters.json --out bitmaps_esci.pkl
 ```
 
 ## Running Evaluation
 Download the product embedding (it takes a long while to generate them!): https://drive.google.com/file/d/1KPoeD8GW1MQpohbAI0lnNcLdxhhtt3hw/view?usp=sharing
 Save it as ./embeddings.parquet
 ```bash
-python main.py
+python main.py --dataset [esci, amazon_c4]
 ```
-
-
-### TODO:
-- Separate filters from product table (otherwise, most of them are null vals)
-- Amazon C4 queries
-- **THE FILTER'S PRODUCT_ID DOESN'T MATCH PRODUCT's PRODUCT_ID, USE PARENT ASIN TO REMAP!!! (LIKELY BECAUSE PRODUCTS TABLE ARE REBUILT)**
+## TODO
+- Prefiltering (+IVFPQ, Roaring bitmaps)
 
 ## Some notes regarding IVFPQ, Roaring Bitmaps, and Baseline evaluation pipeline (Jonathan)
 Feel free to delete this from the README after the info needed for code refactoring / report is extracted.

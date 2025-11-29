@@ -3,10 +3,22 @@ import pandas as pd
 import sqlite3
 from langdetect import detect, LangDetectException
 import argparse
+from datasets import load_dataset
 
 def main(args):
-    df_examples = pd.read_parquet(args.query_file)
-    df_queries = df_examples[df_examples["small_version"] == 1]
+    # Load dataset based on source
+    if args.query_file == 'McAuley-Lab/Amazon-C4':
+        print(f"Loading dataset from HuggingFace: {args.query_file}...")
+        dataset = load_dataset(args.query_file)['test']
+        df_queries = dataset.to_pandas()
+        # Rename columns to match expected format
+        df_queries = df_queries.rename(columns={'item_id': 'product_id', 'qid': 'query_id'})
+        print(f"Loaded {len(df_queries)} queries from Amazon-C4 dataset.")
+    else:
+        # Original ESCI dataset loading
+        df_examples = pd.read_parquet(args.query_file)
+        df_queries = df_examples[df_examples["small_version"] == 1]
+    
     DATABASE_FILE = args.db
 
     if not os.path.exists(DATABASE_FILE):
@@ -84,7 +96,11 @@ def main(args):
     print(f"Rows removed: {initial_rows_2 - filtered_rows_2}")
 
     # Save the final filtered DataFrame to a new csv file
-    output_file = 'esci-data/shopping_queries_dataset_small.csv'
+    if args.query_file == 'McAuley-Lab/Amazon-C4':
+        output_file = '1_build_db/amz_c4_queries.csv'
+    else:
+        output_file = 'esci-data/shopping_queries_dataset_small.csv'
+    
     df_final_filtered.to_csv(output_file, index=False)
     print(f"Final filtered dataset saved to {output_file}")
 
