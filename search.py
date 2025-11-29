@@ -9,7 +9,7 @@ from encoder import Encoder
 from vector_store import VectorStore
 from roaring_index import RoaringIndex
 
-
+# IMPORTANT: every search method must return a ranked list!!!
 class Search:
     def __init__(
         self,

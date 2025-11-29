@@ -2,13 +2,14 @@ import numpy as np
 import time
 import sys
 import os
+import argparse
 from tqdm import tqdm
+from typing import Any, Optional, Callable, Dict, List
 
 # New imports for optimized Parquet I/O
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-from typing import Any, Optional
 
 # Import our classes
 from db import DB
@@ -135,10 +136,167 @@ def build_filter_from_spec(spec: dict[str, Any]) -> dict[str, Any]:
     return {col: ("=", val)}
 
 
+def evaluate_search_method(
+    search_func: Callable,
+    qid_pid_filter_list: List[tuple],
+    all_query_vectors: np.ndarray,
+    search: Search,
+    selectivity_targets: List[tuple],
+    k_fetch: int,
+    method_name: str,
+) -> List[Dict[str, Any]]:
+    """
+    Unified evaluation loop for any search method.
+    
+    Args:
+        search_func: The search function to call (e.g., search.postfilter_search)
+        qid_pid_filter_list: List of (query_id, product_id, filters_json) tuples
+        all_query_vectors: Numpy array of query vectors
+        search: Search object
+        selectivity_targets: List of (level_name, target_percent, selectivity_range) tuples
+        k_fetch: Number of results to fetch
+        method_name: Name of the method for progress bar description
+    
+    Returns:
+        List of result dictionaries for each selectivity level
+    """
+    all_results = []
+
+    for level_name, target_percent, selectivity_range in selectivity_targets:
+        latencies_ms = []
+        hits = 0
+        reciprocal_ranks = []  # For MRR calculation
+        gtsims = []
+        total_queries = 0
+        result_set_size = []
+
+        for i in tqdm(
+            range(len(qid_pid_filter_list)),
+            desc=f"Evaluating {method_name} (Selectivity ~{target_percent}%)",
+        ):
+            query_id, ground_truth_product_id_str, filters_json_string = (
+                qid_pid_filter_list[i]
+            )
+            ground_truth_product_id = int(ground_truth_product_id_str)
+
+            query_vector = all_query_vectors[i : i + 1, :]
+
+            try:
+                filter_suite = json.loads(filters_json_string)
+            except json.JSONDecodeError:
+                filter_suite = []
+
+            selected_spec = select_filter_by_selectivity(
+                filter_suite, target_percent, selectivity_range
+            )
+            dynamic_filter = build_filter_from_spec(selected_spec)
+
+            if not dynamic_filter:
+                continue
+
+            total_queries += 1
+            start_time = time.perf_counter()
+
+            # Call the search function - returns a ranked list
+            final_result_pids = search_func(
+                query_vector=query_vector,
+                k=k_fetch,
+                filter=dynamic_filter,
+            )
+
+            end_time = time.perf_counter()
+            latencies_ms.append((end_time - start_time) * 1000)
+            result_set_size.append(len(final_result_pids))
+
+            # Compute ground truth similarity
+            gt_vector = search.vector_store.get_vector_by_product_id(
+                ground_truth_product_id
+            )
+            gt_sim = (
+                (query_vector @ gt_vector.T)[0, 0] if gt_vector is not None else -1.0
+            )
+            gtsims.append(gt_sim)
+
+            # Check if hit and compute reciprocal rank
+            try:
+                rank = final_result_pids.index(ground_truth_product_id) + 1  # 1-indexed
+                reciprocal_ranks.append(1.0 / rank)
+                hits += 1
+            except ValueError:
+                # Ground truth not in results
+                reciprocal_ranks.append(0.0)
+
+        if total_queries == 0:
+            print(f"Warning: No queries processed for level {level_name}. Check if filters exist.")
+        
+        recall = (hits / total_queries) if total_queries > 0 else 0
+        mrr = np.mean(reciprocal_ranks) if reciprocal_ranks else 0
+        avg_result_set_size = np.mean(result_set_size) if result_set_size else 0
+        avg_latency = np.mean(latencies_ms) if latencies_ms else 0
+        p95_latency = np.percentile(latencies_ms, 95) if latencies_ms else 0
+        avg_gt_sim = np.mean(gtsims) if gtsims else 0
+
+        all_results.append(
+            {
+                "level": level_name,
+                "target_selectivity": f"~{target_percent}%",
+                "total_queries": total_queries,
+                "hits": hits,
+                "recall": recall,
+                "mrr": mrr,
+                "avg_result_set_size": avg_result_set_size,
+                "avg_latency_ms": avg_latency,
+                "p95_latency_ms": p95_latency,
+                "avg_gt_sim": avg_gt_sim,
+            }
+        )
+
+    return all_results
+
+
+def print_results_summary(
+    all_results: List[Dict[str, Any]],
+    method_title: str,
+    m_factor: int,
+    k_fetch: int,
+) -> None:
+    """
+    Print formatted summary table for evaluation results.
+    """
+    print(f"\n--- FINAL SUMMARY: {method_title} ---")
+    print("-" * 95)
+    print(f"M_FACTOR (Overfetch): {m_factor} (K_FETCH={k_fetch})")
+    print(
+        f"{'Level':<18} | {'Recall':<8} | {'MRR':<8} | {'Avg RSS':<8} | "
+        f"{'P95 Lat (ms)':<12} | {'Avg Lat (ms)':<12} | {'Hits':<5}"
+    )
+    print("-" * 95)
+
+    for metrics in all_results:
+        print(
+            f"{metrics['level']:<18} | {metrics['recall']:<8.4f} | {metrics['mrr']:<8.4f} | "
+            f"{metrics['avg_result_set_size']:<8.1f} | {metrics['p95_latency_ms']:<12.2f} | "
+            f"{metrics['avg_latency_ms']:<12.2f} | {metrics['hits']:<5}"
+        )
+
+    print("-" * 95)
+
+
 def main():
+    parser = argparse.ArgumentParser(description="Run search evaluation")
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        choices=["esci", "amz_c4"],
+        default="esci",
+        help="Dataset to use for queries: 'esci' or 'amz_c4' (default: esci)"
+    )
+    args = parser.parse_args()
+
     DB_PATH = "amz.db"
     EMBEDDINGS_PATH = "embeddings1.parquet"
-    QUERY_EMBEDDINGS_PATH = "query_embeddings.parquet"
+    # Use different cache path for different datasets
+    QUERY_EMBEDDINGS_PATH = f"query_embeddings_{args.dataset}.parquet"
 
     K_GOAL = 1
     M_FACTOR = 100  # large over-fetch factor for postfiltering
@@ -152,7 +310,8 @@ def main():
     ]
     db = DB(path=DB_PATH)
     encoder = Encoder()
-    ROARING_PATH = "bitmaps.pkl"
+    # Use different bitmap file for different datasets
+    ROARING_PATH = f"bitmaps_{args.dataset}.pkl"
     roaring = RoaringIndex(ROARING_PATH)
 
 
@@ -162,7 +321,7 @@ def main():
     search.build_index()
     # Build IVFPQ index as an additional ANN backend (new)
     print("built index, now building IVFPQ index...")
-    search.build_ivfpq_index()
+    # search.build_ivfpq_index()
     print("IVFPQ index build complete.")
 
     if os.path.exists(QUERY_EMBEDDINGS_PATH):
@@ -170,8 +329,12 @@ def main():
             QUERY_EMBEDDINGS_PATH
         )
     else:
-        print("No cache found. Encoding queries...")
-        queries = db.load_esci_queries()  # This now returns 4-tuples
+        print(f"No cache found. Encoding queries for dataset: {args.dataset}...")
+        # Load queries based on selected dataset
+        if args.dataset == "esci":
+            queries = db.load_esci_queries()
+        else:
+            queries = db.load_amz_c4_queries()
         assert queries, "Exiting because no queries are found."
 
         query_texts = [q[1] for q in queries]
@@ -199,403 +362,58 @@ def main():
     # ============================================================
     # 1) Raw postfilter: Flat ANN → SQL filter
     # ============================================================
-    all_results = []  # Store results for each level
-
-    for level_name, target_percent, selectivity_range in SELECTIVITY_TARGETS:
-        latencies_ms = []
-        hits = 0
-        gtsims = []
-        total_queries = 0
-        result_set_size = []
-
-        for i in tqdm(
-            range(len(qid_pid_filter_list)),
-            desc=f"Evaluating Post-Filter (Selectivity ~{target_percent}%)",
-        ):
-            query_id, ground_truth_product_id_str, filters_json_string = (
-                qid_pid_filter_list[i]
-            )
-            ground_truth_product_id = int(ground_truth_product_id_str)
-
-            query_vector = all_query_vectors[i : i + 1, :]
-
-            try:
-                filter_suite = json.loads(filters_json_string)
-            except json.JSONDecodeError:
-                filter_suite = []  # Default to empty if JSON is invalid
-
-            # Select filter based on the *current* loop's target_percent
-            selected_spec = select_filter_by_selectivity(
-                filter_suite, target_percent, selectivity_range
-            )
-            dynamic_filter = build_filter_from_spec(selected_spec)
-            if not dynamic_filter:
-                continue
-
-            total_queries += 1
-            start_time = time.perf_counter()
-
-            final_result_pids = search.postfilter_search(
-                query_vector=query_vector,
-                k=K_FETCH,
-                filter=dynamic_filter,
-            )
-
-            final_result_set = set(final_result_pids)
-            end_time = time.perf_counter()
-            latencies_ms.append((end_time - start_time) * 1000)
-            result_set_size.append(len(list(final_result_set)))
-
-            gt_vector = search.vector_store.get_vector_by_product_id(
-                ground_truth_product_id
-            )
-
-            gt_sim = (
-                (query_vector @ gt_vector.T)[0, 0] if gt_vector is not None else -1.0
-            )
-            gtsims.append(gt_sim)
-
-            is_hit = ground_truth_product_id in final_result_set
-
-            if is_hit:
-                hits += 1
-
-        if total_queries == 0:
-            print(f"Warning: No queries processed for level {level_name}. Check if filters exist.")
-        recall = (hits / total_queries) if total_queries > 0 else 0
-        avg_result_set_size = np.mean(result_set_size) if result_set_size else 0
-        avg_latency = np.mean(latencies_ms) if latencies_ms else 0
-        p95_latency = np.percentile(latencies_ms, 95) if latencies_ms else 0
-        avg_gt_sim = np.mean(gtsims) if gtsims else 0
-
-        all_results.append(
-            {
-                "level": level_name,
-                "target_selectivity": f"~{target_percent}%",
-                "total_queries": total_queries,
-                "hits": hits,
-                "recall": recall,
-                "avg_result_set_size": avg_result_set_size,
-                "avg_latency_ms": avg_latency,
-                "p95_latency_ms": p95_latency,
-                "average_cosine_similarity_between_query_vector_and_ground_truth_item": avg_gt_sim,
-            }
-        )
-
-    print("\n--- FINAL SUMMARY: POST-FILTERING BY SELECTIVITY ---")
-    print("-" * 70)
-    print(f"M_FACTOR (Overfetch): {M_FACTOR} (K_FETCH={K_FETCH})")
-    print(
-        f"{'Level':<18} | {'Recall':<8} | {'Avg Result Set Size':<8} | {'P95 Lat (ms)':<12} | {'Avg Lat (ms)':<12} | {'Hits':<5}"
+    all_results = evaluate_search_method(
+        search_func=search.postfilter_search,
+        qid_pid_filter_list=qid_pid_filter_list,
+        all_query_vectors=all_query_vectors,
+        search=search,
+        selectivity_targets=SELECTIVITY_TARGETS,
+        k_fetch=K_FETCH,
+        method_name="Post-Filter (Flat)",
     )
-    print("-" * 70)
+    print_results_summary(all_results, "POST-FILTERING BY SELECTIVITY", M_FACTOR, K_FETCH)
 
-    for metrics in all_results:
-        print(
-            f"{metrics['level']:<18} | {metrics['recall']:<8.4f} | {metrics['avg_result_set_size']:<5} | {metrics['p95_latency_ms']:<12.2f} | {metrics['avg_latency_ms']:<12.2f} | {metrics['hits']:<5}"
-        )
-
-    print("-" * 70)
-
-    # # ============================================================
-    # # 2) IVFPQ postfilter: IVFPQ ANN → SQL filter
-    # # ============================================================
-    all_results_ivfpq = []  # Store IVFPQ results for each level
-
-    for level_name, target_percent, selectivity_range in SELECTIVITY_TARGETS:
-        latencies_ms = []
-        hits = 0
-        gtsims = []
-        total_queries = 0
-        result_set_size = []
-
-        for i in tqdm(
-            range(len(qid_pid_filter_list)),
-            desc=f"Evaluating Post-Filter IVFPQ (Selectivity ~{target_percent}%)",
-        ):
-            query_id, ground_truth_product_id_str, filters_json_string = (
-                qid_pid_filter_list[i]
-            )
-            ground_truth_product_id = int(ground_truth_product_id_str)
-
-            query_vector = all_query_vectors[i : i + 1, :]
-
-            try:
-                filter_suite = json.loads(filters_json_string)
-            except json.JSONDecodeError:
-                filter_suite = []  # Default to empty if JSON is invalid
-
-            selected_spec = select_filter_by_selectivity(
-                filter_suite, target_percent, selectivity_range
-            )
-            dynamic_filter = build_filter_from_spec(selected_spec)
-
-            if not dynamic_filter:
-                continue
-
-            total_queries += 1
-            start_time = time.perf_counter()
-
-            final_result_pids = search.postfilter_search_ivfpq(
-                query_vector=query_vector,
-                k=K_FETCH,
-                filter=dynamic_filter,
-            )
-
-            final_result_set = set(final_result_pids)
-            end_time = time.perf_counter()
-            latencies_ms.append((end_time - start_time) * 1000)
-            result_set_size.append(len(list(final_result_set)))
-
-            gt_vector = search.vector_store.get_vector_by_product_id(
-                ground_truth_product_id
-            )
-
-            gt_sim = (
-                (query_vector @ gt_vector.T)[0, 0] if gt_vector is not None else -1.0
-            )
-            gtsims.append(gt_sim)
-
-            is_hit = ground_truth_product_id in final_result_set
-
-            if is_hit:
-                hits += 1
-
-        recall = (hits / total_queries) if total_queries > 0 else 0
-        avg_result_set_size = np.mean(result_set_size) if result_set_size else 0
-        avg_latency = np.mean(latencies_ms) if latencies_ms else 0
-        p95_latency = np.percentile(latencies_ms, 95) if latencies_ms else 0
-        avg_gt_sim = np.mean(gtsims) if gtsims else 0
-
-        all_results_ivfpq.append(
-            {
-                "level": level_name,
-                "target_selectivity": f"~{target_percent}%",
-                "total_queries": total_queries,
-                "hits": hits,
-                "recall": recall,
-                "avg_result_set_size": avg_result_set_size,
-                "avg_latency_ms": avg_latency,
-                "p95_latency_ms": p95_latency,
-                "average_cosine_similarity_between_query_vector_and_ground_truth_item": avg_gt_sim,
-            }
-        )
-
-    print("\n--- FINAL SUMMARY: POST-FILTERING BY SELECTIVITY (IVFPQ) ---")
-    print("-" * 70)
-    print(f"M_FACTOR (Overfetch): {M_FACTOR} (K_FETCH={K_FETCH})")
-    print(
-        f"{'Level':<18} | {'Recall':<8} | {'Avg Result Set Size':<8} | {'P95 Lat (ms)':<12} | {'Avg Lat (ms)':<12} | {'Hits':<5}"
+    # ============================================================
+    # 2) IVFPQ postfilter: IVFPQ ANN → SQL filter
+    # ============================================================
+    all_results_ivfpq = evaluate_search_method(
+        search_func=search.postfilter_search_ivfpq,
+        qid_pid_filter_list=qid_pid_filter_list,
+        all_query_vectors=all_query_vectors,
+        search=search,
+        selectivity_targets=SELECTIVITY_TARGETS,
+        k_fetch=K_FETCH,
+        method_name="Post-Filter (IVFPQ)",
     )
-    print("-" * 70)
+    print_results_summary(all_results_ivfpq, "POST-FILTERING BY SELECTIVITY (IVFPQ)", M_FACTOR, K_FETCH)
 
-    for metrics in all_results_ivfpq:
-        print(
-            f"{metrics['level']:<18} | {metrics['recall']:<8.4f} | {metrics['avg_result_set_size']:<5} | {metrics['p95_latency_ms']:<12.2f} | {metrics['avg_latency_ms']:<12.2f} | {metrics['hits']:<5}"
-        )
-
-    print("-" * 70)
-
-    # # ============================================================
-    # # 3) Roaring bitmap postfilter: Flat ANN → Roaring filter
-    # # ============================================================
-    all_results_roaring = []
-
-    for level_name, target_percent, selectivity_range in SELECTIVITY_TARGETS:
-        latencies_ms = []
-        hits = 0
-        gtsims = []
-        total_queries = 0
-        result_set_size = []
-
-        for i in tqdm(
-            range(len(qid_pid_filter_list)),
-            desc=f"Evaluating Post-Filter (Roaring, ~{target_percent}%)",
-        ):
-            query_id, ground_truth_product_id_str, filters_json_string = (
-                qid_pid_filter_list[i]
-            )
-            ground_truth_product_id = int(ground_truth_product_id_str)
-
-            query_vector = all_query_vectors[i : i + 1, :]
-
-            try:
-                filter_suite = json.loads(filters_json_string)
-            except json.JSONDecodeError:
-                filter_suite = []
-
-            selected_spec = select_filter_by_selectivity(
-                filter_suite, target_percent, selectivity_range
-            )
-            dynamic_filter = build_filter_from_spec(selected_spec)
-
-            if not dynamic_filter:
-                continue
-
-            total_queries += 1
-            start_time = time.perf_counter()
-
-            # Roaring-based post-filter
-            final_result_pids = search.postfilter_search_roaring(
-                query_vector=query_vector,
-                k=K_FETCH,
-                filter=dynamic_filter,
-            )
-
-            final_result_set = set(final_result_pids)
-            end_time = time.perf_counter()
-            latencies_ms.append((end_time - start_time) * 1000)
-            result_set_size.append(len(final_result_set))
-
-            gt_vector = search.vector_store.get_vector_by_product_id(
-                ground_truth_product_id
-            )
-            gt_sim = (
-                (query_vector @ gt_vector.T)[0, 0] if gt_vector is not None else -1.0
-            )
-            gtsims.append(gt_sim)
-
-            if ground_truth_product_id in final_result_set:
-                hits += 1
-
-        recall = (hits / total_queries) if total_queries > 0 else 0
-        avg_result_set_size = np.mean(result_set_size) if result_set_size else 0
-        avg_latency = np.mean(latencies_ms) if latencies_ms else 0
-        p95_latency = np.percentile(latencies_ms, 95) if latencies_ms else 0
-        avg_gt_sim = np.mean(gtsims) if gtsims else 0
-
-        all_results_roaring.append(
-            {
-                "level": level_name,
-                "target_selectivity": f"~{target_percent}%",
-                "total_queries": total_queries,
-                "hits": hits,
-                "recall": recall,
-                "avg_result_set_size": avg_result_set_size,
-                "avg_latency_ms": avg_latency,
-                "p95_latency_ms": p95_latency,
-                "average_cosine_similarity_between_query_vector_and_ground_truth_item": avg_gt_sim,
-            }
-        )
-
-    print("\n--- FINAL SUMMARY: POST-FILTERING BY SELECTIVITY (Roaring) ---")
-    print("-" * 70)
-    print(f"M_FACTOR (Overfetch): {M_FACTOR} (K_FETCH={K_FETCH})")
-    print(
-        f"{'Level':<18} | {'Recall':<8} | {'Avg Result Set Size':<8} | "
-        f"{'P95 Lat (ms)':<12} | {'Avg Lat (ms)':<12} | {'Hits':<5}"
+    # ============================================================
+    # 3) Roaring bitmap postfilter: Flat ANN → Roaring filter
+    # ============================================================
+    all_results_roaring = evaluate_search_method(
+        search_func=search.postfilter_search_roaring,
+        qid_pid_filter_list=qid_pid_filter_list,
+        all_query_vectors=all_query_vectors,
+        search=search,
+        selectivity_targets=SELECTIVITY_TARGETS,
+        k_fetch=K_FETCH,
+        method_name="Post-Filter (Roaring)",
     )
-    print("-" * 70)
-
-    for metrics in all_results_roaring:
-        print(
-            f"{metrics['level']:<18} | {metrics['recall']:<8.4f} | "
-            f"{metrics['avg_result_set_size']:<5} | "
-            f"{metrics['p95_latency_ms']:<12.2f} | "
-            f"{metrics['avg_latency_ms']:<12.2f} | "
-            f"{metrics['hits']:<5}"
-        )
-    print("-" * 70)
+    print_results_summary(all_results_roaring, "POST-FILTERING BY SELECTIVITY (Roaring)", M_FACTOR, K_FETCH)
 
     # ============================================================
     # 4) IVFPQ + Roaring bitmap postfilter: IVFPQ ANN → Roaring filter
     # ============================================================
-    all_results_ivfpq_roaring = []
-
-    for level_name, target_percent, selectivity_range in SELECTIVITY_TARGETS:
-        latencies_ms = []
-        hits = 0
-        gtsims = []
-        total_queries = 0
-        result_set_size = []
-
-        for i in tqdm(
-            range(len(qid_pid_filter_list)),
-            desc=f"Evaluating Post-Filter (IVFPQ + Roaring, ~{target_percent}%)",
-        ):
-            query_id, ground_truth_product_id_str, filters_json_string = (
-                qid_pid_filter_list[i]
-            )
-            ground_truth_product_id = int(ground_truth_product_id_str)
-
-            query_vector = all_query_vectors[i : i + 1, :]
-
-            try:
-                filter_suite = json.loads(filters_json_string)
-            except json.JSONDecodeError:
-                filter_suite = []
-
-            selected_spec = select_filter_by_selectivity(
-                filter_suite, target_percent, selectivity_range
-            )
-            dynamic_filter = build_filter_from_spec(selected_spec)
-
-            if not dynamic_filter:
-                continue
-
-            total_queries += 1
-            start_time = time.perf_counter()
-
-            final_result_pids = search.postfilter_search_ivfpq_roaring(
-                query_vector=query_vector,
-                k=K_FETCH,
-                filter=dynamic_filter,
-            )
-
-            final_result_set = set(final_result_pids)
-            end_time = time.perf_counter()
-            latencies_ms.append((end_time - start_time) * 1000)
-            result_set_size.append(len(final_result_set))
-
-            gt_vector = search.vector_store.get_vector_by_product_id(
-                ground_truth_product_id
-            )
-            gt_sim = (
-                (query_vector @ gt_vector.T)[0, 0] if gt_vector is not None else -1.0
-            )
-            gtsims.append(gt_sim)
-
-            if ground_truth_product_id in final_result_set:
-                hits += 1
-
-        recall = (hits / total_queries) if total_queries > 0 else 0
-        avg_result_set_size = np.mean(result_set_size) if result_set_size else 0
-        avg_latency = np.mean(latencies_ms) if latencies_ms else 0
-        p95_latency = np.percentile(latencies_ms, 95) if latencies_ms else 0
-        avg_gt_sim = np.mean(gtsims) if gtsims else 0
-
-        all_results_ivfpq_roaring.append(
-            {
-                "level": level_name,
-                "target_selectivity": f"~{target_percent}%",
-                "total_queries": total_queries,
-                "hits": hits,
-                "recall": recall,
-                "avg_result_set_size": avg_result_set_size,
-                "avg_latency_ms": avg_latency,
-                "p95_latency_ms": p95_latency,
-                "average_cosine_similarity_between_query_vector_and_ground_truth_item": avg_gt_sim,
-            }
-        )
-
-    print("\n--- FINAL SUMMARY: POST-FILTERING BY SELECTIVITY (IVFPQ + Roaring) ---")
-    print("-" * 70)
-    print(f"M_FACTOR (Overfetch): {M_FACTOR} (K_FETCH={K_FETCH})")
-    print(
-        f"{'Level':<18} | {'Recall':<8} | {'Avg Result Set Size':<8} | "
-        f"{'P95 Lat (ms)':<12} | {'Avg Lat (ms)':<12} | {'Hits':<5}"
+    all_results_ivfpq_roaring = evaluate_search_method(
+        search_func=search.postfilter_search_ivfpq_roaring,
+        qid_pid_filter_list=qid_pid_filter_list,
+        all_query_vectors=all_query_vectors,
+        search=search,
+        selectivity_targets=SELECTIVITY_TARGETS,
+        k_fetch=K_FETCH,
+        method_name="Post-Filter (IVFPQ + Roaring)",
     )
-    print("-" * 70)
-
-    for metrics in all_results_ivfpq_roaring:
-        print(
-            f"{metrics['level']:<18} | {metrics['recall']:<8.4f} | "
-            f"{metrics['avg_result_set_size']:<5} | "
-            f"{metrics['p95_latency_ms']:<12.2f} | "
-            f"{metrics['avg_latency_ms']:<12.2f} | "
-            f"{metrics['hits']:<5}"
-        )
-    print("-" * 70)
+    print_results_summary(all_results_ivfpq_roaring, "POST-FILTERING BY SELECTIVITY (IVFPQ + Roaring)", M_FACTOR, K_FETCH)
 
     db.close()
 

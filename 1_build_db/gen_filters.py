@@ -383,7 +383,8 @@ def main(args):
             df_queries = dataset.to_pandas()
             df_queries = df_queries.rename(columns={'item_id': 'product_id'})
 
-        else: df_queries = pd.read_csv(args.query_csv)
+        elif 'shopping_queries_dataset_small.csv': df_queries = pd.read_csv(args.query_csv)
+        else: raise NotImplementedError("Only ESCI and Amazon-C4 datasets are supported.")
 
         print(f"Loaded {len(df_queries)} queries.")
         initial_rows = len(df_queries)
@@ -448,6 +449,6 @@ if __name__ == "__main__":
     parser.add_argument('--db', type=str, default='amz.db', help='Path to SQLite database file')
     parser.add_argument('--query_csv', type=str, default='esci-data/shopping_queries_dataset_small.csv', help='Path to query CSV file')
     parser.add_argument('--output_all', type=str, default='1_build_db/amz_c4_filters_all.json', help='Output file for all filters')
-    parser.add_argument('--output_deduplicated', type=str, default='1_build_db/amz_c4_filters_deduplicated.json', help='Output file for deduplicated filters')
+    parser.add_argument('--output_deduplicated', type=str, default='1_build_db/amz_c4_filters.json', help='Output file for deduplicated filters')
     args = parser.parse_args()
     main(args)

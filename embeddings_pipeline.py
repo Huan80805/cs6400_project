@@ -2,22 +2,15 @@
 """
 Implements the embedding plan from the project proposal:
 • Model: hyp1231/blair-roberta-large (BLAIR)
-• Text aggregation: product text + (top-k) review snippets
-• Token-chunking with overlap (default: max_length=64, stride=10)
-• Per-chunk embeddings via mean pooling
-• Vector aggregation across chunks by element-wise average
-• Final L2 normalization
+• Text aggregation: product title, description  (top-k review snippets, features, details...)
 • Output written as sharded .npz files (asins, vectors)
 
 Quick start to run
------------
 python embeddings_pipeline.py \
   --db /path/to/amazon.sqlite \
   --out_dir ./emb_shards \
-  --page_size 512 \
-  --topk_reviews 20 \
-  --min_chars 20 \
-  --categories All_Beauty Amazon_Fashion Appliances
+  --page_size 512
+  --parquet ./embeddings.parquet
 
 Dependencies
 ------------
@@ -26,7 +19,6 @@ python -m pip install torch transformers numpy tqdm
 python -m pip install pandas pyarrow
 
 """
-# TODO: input field for embedding is different for Amazon-C4 vs ESCI
 from __future__ import annotations
 import os
 import argparse
@@ -67,7 +59,7 @@ def build_product_document(
     #     return None
     # return doc
     # Reference: https://github.com/hyp1231/AmazonReviews2023/blob/main/product_search_results/dataset/process_esci.py#L52
-    # TODO: this is only for ESCI, need to adjust for Amazon-C4
+
     meta_text = ''
     if title:
         meta_text += title + ' '
@@ -211,10 +203,10 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--categories", nargs="*", default=None, help="Optional main_category filter list",
     )
     p.add_argument(
-        "--page_size", type=int, default=1024, help="Products fetched per page"
+        "--offset", type=int, default=0, help="Starting row offset"
     )
     p.add_argument(
-        "--offset", type=int, default=0, help="Starting row offset"
+        "--page_size", type=int, default=1024, help="Products fetched per page"
     )
     p.add_argument(
         "--topk_reviews", type=int, default=5, help="Max number of reviews to append per product",

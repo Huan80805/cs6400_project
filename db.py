@@ -6,11 +6,8 @@ import numpy as np
 
 class DB:
     def __init__(self, path: str):
-        print(f"Connecting to DB at {path}")
         self.conn = sqlite3.connect(path)
-        print("DB connection established.")
         self.conn.row_factory = sqlite3.Row
-        print("Row factory set.")
 
     def count_products(self, categories: Optional[List[str]]) -> int:
         cur = self.conn.cursor()
@@ -60,34 +57,69 @@ class DB:
         return [(r[0], r[1]) for r in cur.fetchall()]
 
     def load_esci_queries(
-        self, categories :Optional[List[str]] = None
-    ) -> List[Tuple[str, str, str]]:
+        self, categories: Optional[List[str]] = None
+    ) -> List[Tuple[str, str, int, str]]:
         """
-        Use 'E' label
+        Load ESCI queries with 'E' (Exact) label.
         Returns list of (query_id, query_text, ground_truth_product_id, filters_json)
-        ground_truth_product_id is parent_asin
+        ground_truth_product_id is the integer product_id from products table.
         """
         cur = self.conn.cursor()
         if categories:
             cur.execute(
                 f"""
-                SELECT eq.query_id, eq.query, p.product_id, pf.filters_json
+                SELECT eq.query_id, eq.query, p.product_id, ef.filters_json
                 FROM esci_queries eq
                 JOIN products p ON eq.product_id = p.parent_asin
-                ON eq.product_id  = p.parent_asin
-                LEFT JOIN product_filters pf ON p.product_id = pf.product_id
-                WHERE esci_label = 'E' AND p.main_category IN ({",".join(["?"] * len(categories))})
+                LEFT JOIN esci_filters ef ON p.product_id = ef.product_id
+                WHERE eq.esci_label = 'E' AND p.main_category IN ({",".join(["?"] * len(categories))})
                 """,
                 categories,
             )
         else:
             cur.execute(
                 """
-                SELECT eq.query_id, eq.query, p.product_id, pf.filters_json
+                SELECT eq.query_id, eq.query, p.product_id, ef.filters_json
                 FROM esci_queries eq
                 JOIN products p ON eq.product_id = p.parent_asin
-                LEFT JOIN product_filters pf ON p.product_id = pf.product_id
-                WHERE esci_label = 'E'
+                LEFT JOIN esci_filters ef ON p.product_id = ef.product_id
+                WHERE eq.esci_label = 'E'
+                """
+            )
+
+        queries = cur.fetchall()
+        return [
+            (r["query_id"], r["query"], r["product_id"], r["filters_json"])
+            for r in queries
+        ]
+
+    def load_amz_c4_queries(
+        self, categories: Optional[List[str]] = None
+    ) -> List[Tuple[str, str, int, str]]:
+        """
+        Load Amazon-C4 queries.
+        Returns list of (query_id, query_text, ground_truth_product_id, filters_json)
+        ground_truth_product_id is the integer product_id from products table.
+        """
+        cur = self.conn.cursor()
+        if categories:
+            cur.execute(
+                f"""
+                SELECT aq.query_id, aq.query, p.product_id, af.filters_json
+                FROM amz_c4_queries aq
+                JOIN products p ON aq.product_id = p.parent_asin
+                LEFT JOIN amz_c4_filters af ON p.product_id = af.product_id
+                WHERE p.main_category IN ({",".join(["?"] * len(categories))})
+                """,
+                categories,
+            )
+        else:
+            cur.execute(
+                """
+                SELECT aq.query_id, aq.query, p.product_id, af.filters_json
+                FROM amz_c4_queries aq
+                JOIN products p ON aq.product_id = p.parent_asin
+                LEFT JOIN amz_c4_filters af ON p.product_id = af.product_id
                 """
             )
 

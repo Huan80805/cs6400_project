@@ -9,7 +9,6 @@ embeddings.parquet
 embeddings1.parquet
 debug_overlap.py
 debug*
-bitmaps.pkl
-bitmaps_old.pkl
+*.pkl
 query_embeddings.parquet
 main_backup.py
