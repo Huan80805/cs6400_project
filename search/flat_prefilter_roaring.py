@@ -21,14 +21,13 @@ class FlatPrefilterRoaring(Search):
         super().__init__(db, encoder, vector_store, method_title, method_name)
         self.roaring_index = roaring_index
 
-    @property
     def build_index(self, vectors: np.ndarray, product_ids: List[int]):
         return FlatL2(
+            dims=self.vector_store.dims,
             vectors=vectors,
             product_ids=product_ids,
         )
 
-    @property
     def search(self, query_vector: np.ndarray, k: int, filter: Dict):
         """
         1. Roaring Filter -> IDs
@@ -41,16 +40,14 @@ class FlatPrefilterRoaring(Search):
         filtered_ids_set = self.roaring_index.get_ids_for_filter(filter)
 
         # 2. Get vectors
-        sub_vectors, sub_ids = (
-            self.vector_store.get_vectors_and_product_ids_from_prefiltered_ids(
-                filtered_ids_set
-            )
+        sub_vectors, sub_ids = self.vector_store.get_vectors_and_product_ids_from_prefiltered_ids(
+            filtered_ids_set
         )
         if len(sub_ids) == 0:
             return []
 
         # 3. Construct a temporary brute-force index
-        temp_index: FlatL2 = self.build_index(vectors=sub_vectors, ids=sub_ids)
+        temp_index: FlatL2 = self.build_index(vectors=sub_vectors, product_ids=sub_ids)
 
         # 4. Search
         search_k = min(k, len(sub_ids))

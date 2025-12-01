@@ -14,9 +14,8 @@ class IVFPQPostfilter(Search):
         method_title="POST-FILTERING BY SELECTIVITY (IVFPQ)",
         method_name="Post-Filter (IVFPQ)",
     ):
-        super().__init__(db, encoder, vector_store, index, method_title, method_name)
+        super().__init__(db, encoder, vector_store, method_title, method_name, index)
 
-    @property
     def search(self, query_vector: np.ndarray, k: int, filter: Dict):
         assert self.index is not None, "self.index is not present"
 

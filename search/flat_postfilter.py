@@ -15,7 +15,6 @@ class FlatPostfilter(Search):
     ):
         super().__init__(db, encoder, vector_store, method_title, method_name, index)
 
-    @property
     def search(self, query_vector: np.ndarray, k: int, filter: Dict):
         assert self.index is not None, "self.index is not present"
 

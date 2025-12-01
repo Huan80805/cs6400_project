@@ -19,10 +19,9 @@ class IVFPQPostfilterRoaring(Search):
         method_title="POST-FILTERING BY SELECTIVITY (IVFPQ + Roaring)",
         method_name="Post-Filter (IVFPQ + Roaring)",
     ):
-        super().__init__(db, encoder, vector_store, index, method_title, method_name)
+        super().__init__(db, encoder, vector_store, method_title, method_name, index)
         self.roaring_index = roaring_index
 
-    @property
     def search(self, query_vector: np.ndarray, k: int, filter: Dict):
         """
         1) Global IVFPQ ANN over all vectors
