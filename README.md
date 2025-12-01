@@ -47,7 +47,7 @@ python 1_build_db/load_filters.py --db amz.db --json 1_build_db/amz_c4_filters.j
 Directly download bitmaps_esci.pkl using
 
 ```bash
-curl https://cs6400.s3.ap-northeast-1.amazonaws.com/bitmaps_esci.pkl
+curl https://cs6400.s3.ap-northeast-1.amazonaws.com/bitmaps_esci.pkl --out bitmaps_esci.pkl
 ```
 
 Or generate from the most up-to-date code using
@@ -63,7 +63,7 @@ Note that the command above takes ~24mins on a 24-core, 161GB RAM PACE cluster.
 Directly download embeddings.parquet using
 
 ```bash
-curl https://cs6400.s3.ap-northeast-1.amazonaws.com/embeddings.parquet
+curl https://cs6400.s3.ap-northeast-1.amazonaws.com/embeddings.parquet --out embeddings.parquet
 ```
 
 Embedding generation using embeddings_pipeline.py takes hours, but here is the command:

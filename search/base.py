@@ -28,12 +28,10 @@ class Search(ABC):
         self.method_title = method_title
         self.index = index
 
-    @property
     @abstractmethod
-    def search(self, query_vector: np.ndarray, k: int, *args, **kwargs) -> List[int]:
+    def search(self, query_vector: np.ndarray, k: int, filter: Dict, *args, **kwargs) -> List[int]:
         pass
 
-    @property
     def evaluate(
         self,
         qid_pid_filter_list: List[tuple],
@@ -92,7 +90,7 @@ class Search(ABC):
 
                 # Call the search function - returns a ranked list
 
-                final_result_pids = self.search(query_vector=query_vector, k=k_fetch)
+                final_result_pids = self.search(query_vector=query_vector, k=k_fetch, filter=dynamic_filter)
 
                 end_time = time.perf_counter()
                 latencies_ms.append((end_time - start_time) * 1000)
@@ -149,30 +147,36 @@ class Search(ABC):
 
         return all_results
 
-    @property
-    def print_results_summary(
+    def log_results_summary(
         self,
         all_results: List[Dict[str, Any]],
         m_factor: int,
         k_fetch: int,
+        out_path: str,
     ) -> None:
         """
-        Print formatted summary table for evaluation results.
+        Append formatted summary table for evaluation results to a file.
         """
-        print(f"\n--- FINAL SUMMARY: {self.method_title} ---")
-        print("-" * 95)
-        print(f"M_FACTOR (Overfetch): {m_factor} (K_FETCH={k_fetch})")
-        print(
+        lines = []
+
+        lines.append(f"\n--- FINAL SUMMARY: {self.method_title} ---")
+        lines.append("-" * 95)
+        lines.append(f"M_FACTOR (Overfetch): {m_factor} (K_FETCH={k_fetch})")
+        lines.append(
             f"{'Level':<18} | {'Recall':<8} | {'MRR':<8} | {'Avg RSS':<8} | "
             f"{'P95 Lat (ms)':<12} | {'Avg Lat (ms)':<12} | {'Hits':<5}"
         )
-        print("-" * 95)
+        lines.append("-" * 95)
 
         for metrics in all_results:
-            print(
+            lines.append(
                 f"{metrics['level']:<18} | {metrics['recall']:<8.4f} | {metrics['mrr']:<8.4f} | "
                 f"{metrics['avg_result_set_size']:<8.1f} | {metrics['p95_latency_ms']:<12.2f} | "
                 f"{metrics['avg_latency_ms']:<12.2f} | {metrics['hits']:<5}"
             )
 
-        print("-" * 95)
+        lines.append("-" * 95)
+        lines.append("")
+
+        with open(out_path, "a", encoding="utf-8") as f:
+            f.write("\n".join(lines))

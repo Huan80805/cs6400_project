@@ -5,7 +5,6 @@ SearchResult = Union[List[int], Set[int]]
 
 
 class Index(ABC):
-    @property
     @abstractmethod
     def search(self, *args, **kwargs) -> SearchResult:
         pass

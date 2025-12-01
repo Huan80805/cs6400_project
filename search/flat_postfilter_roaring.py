@@ -20,10 +20,9 @@ class FlatPostfilterRoaring(Search):
         method_title="POST-FILTERING BY SELECTIVITY (Roaring)",
         method_name="Post-Filter (Roaring)",
     ):
-        super().__init__(db, encoder, vector_store, index, method_title, method_name)
+        super().__init__(db, encoder, vector_store, method_title, method_name, index)
         self.roaring_index = roaring_index
 
-    @property
     def search(self, query_vector: np.ndarray, k: int, filter: Dict):
         """
         Post-filtering using Roaring bitmaps instead of SQL:

@@ -41,6 +41,28 @@ class IVFPQ(Index):
                 m_candidate //= 2
             m = max(1, m_candidate)
 
+        max_train_points = min(n_vectors, train_size)
+
+        if nlist > max_train_points:
+            print(
+                f"Reducing nlist from {nlist} to {max_train_points} because "
+                f"we only have {max_train_points} training points."
+            )
+            nlist = max_train_points
+
+        # --- Clamp nbits so we don't have more PQ centroids than training points ---
+        # PQ uses k = 2**nbits clusters per sub-quantizer. FAISS requires nx >= k.
+        max_clusters = max_train_points
+        if max_clusters < (1 << nbits):
+            old_nbits = nbits
+            # largest nbits such that 2**nbits <= max_clusters
+            nbits = int(np.floor(np.log2(max_clusters)))
+            nbits = max(1, nbits)
+            print(
+                f"Reducing nbits from {old_nbits} to {nbits} because we only have "
+                f"{max_clusters} training points."
+            )
+
         print(
             f"Building IVFPQ index: N={n_vectors}, dim={dim}, "
             f"nlist={nlist}, m={m}, nbits={nbits}"
@@ -68,12 +90,11 @@ class IVFPQ(Index):
         # --- Search-time params ---
         ivfpq.nprobe = min(nprobe, nlist)
 
-        self.ivfpq_index = ivfpq
+        self.index = ivfpq
 
         end_time = time.time()
         print(f"Index build time (IVFPQ): {end_time - start_time:.2f} seconds")
 
-    @property
     def search(self, query_vector: np.ndarray, k: int) -> SearchResult:
         _, ids = self.index.search(query_vector, k)
         candidate_ids = [int(i) for i in ids[0].tolist() if int(i) != -1]

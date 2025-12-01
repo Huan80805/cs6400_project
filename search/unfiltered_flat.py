@@ -14,7 +14,6 @@ class UnfilteredFlat(Search):
     ):
         super().__init__(db, encoder, vector_store, method_title, method_name)
 
-    @property
     def build_index(self):
         self.index = FlatL2(
             self.vector_store.dims,
@@ -22,7 +21,6 @@ class UnfilteredFlat(Search):
             self.vector_store.product_ids,
         )
 
-    @property
     def search(self, query_vector: np.ndarray, k: int):
         """
         Baseline: no filter, exact ANN over the full flat index.
