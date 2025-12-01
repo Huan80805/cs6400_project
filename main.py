@@ -67,22 +67,34 @@ def main():
     # ============================================================
     # 1) Raw prefilter: SQL filter → Flat ANN
     # ============================================================
-    search_instances.append(FlatPrefilter(db, encoder, vector_store))
+    search_instances.append(
+        FlatPrefilter(db, encoder, vector_store, flat_l2_index, rebuild_index=False)
+    )
 
     # ============================================================
     # 2) IVFPQ prefilter: SQL filter → IVFPQ ANN
     # ============================================================
-    search_instances.append(IVFPQPrefilter(db, encoder, vector_store))
+    search_instances.append(
+        IVFPQPrefilter(db, encoder, vector_store, ivfpq_index, rebuild_index=False)
+    )
 
     # ============================================================
     # 3) Roaring bitmap prefilter: Roaring filter → Flat ANN
     # ============================================================
-    search_instances.append(FlatPrefilterRoaring(db, encoder, vector_store, roaring))
+    search_instances.append(
+        FlatPrefilterRoaring(
+            db, encoder, vector_store, roaring, flat_l2_index, rebuild_index=False
+        )
+    )
 
     # ============================================================
     # 4) IVFPQ + Roaring bitmap prefilter: Roaring filter → IVFPQ ANN
     # ============================================================
-    search_instances.append(IVFPQPrefilterRoaring(db, encoder, vector_store, roaring))
+    search_instances.append(
+        IVFPQPrefilterRoaring(
+            db, encoder, vector_store, roaring, ivfpq_index, rebuild_index=False
+        )
+    )
 
     # ============================================================
     # 5) Raw postfilter: Flat ANN → SQL filter

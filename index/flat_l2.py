@@ -22,7 +22,7 @@ class FlatL2(Index):
         end_time = time.time()
         print(f"Index build time: {end_time - start_time:.2f} seconds")
 
-    def search(self, query_vector: np.ndarray, k: int) -> SearchResult:
-        _, ids = self.index.search(query_vector, k)
+    def search(self, query_vector: np.ndarray, k: int, *args, **kwargs) -> SearchResult:
+        _, ids = self.index.search(query_vector, k, *args, **kwargs)
         candidate_ids = [int(i) for i in ids[0].tolist() if int(i) != -1]
         return candidate_ids

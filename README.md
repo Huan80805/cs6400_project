@@ -1,6 +1,31 @@
+# Implementation of Report Sections
+
+## Section 2.2 (Data Pipeline):
+
+- `./download_amz2023.sh`: Shell script for downloading the Amazon Reviews'23 Dataset
+- `./1_build_db/schema.sql`: SQLite database schema definition
+-
+
+- src/filtering/filter_engine.py: Core filtering logic and query parsing
+- src/filtering/predicate_pushdown.py: Optimization for early filtering
+
+## Section 2.3 (Hybrid Search Algorithm):
+
+- src/search/hybrid_search.py: Main hybrid search implementation
+- src/search/result_merger.py: Combines and ranks results from vector and metadata components
+
+## Section 4 (Evaluation):
+
+- experiments/run_experiments.py: Main evaluation script
+- experiments/metrics.py: Recall@k and latency measurement
+- experiments/generate_plots.py: Creates figures shown in the report
+
+# Setup
+
 ## Build Database
 
 To simplify setup, we can directly download the sqlite snapshot using
+
 ```bash
 curl https://cs6400.s3.ap-northeast-1.amazonaws.com/amz.db --out amz.db
 ```
@@ -19,13 +44,16 @@ git clone https://github.com/amazon-science/esci-data.git # remember to enable l
 chmod +x download_amz2023.sh
 ./download_amz2023.sh
 ```
+
 The downloaded files are stored under the directory ./amz2023_raw.
 
 3. Download the extracted structured filters using
+
 ```bash
 curl https://cs6400.s3.ap-northeast-1.amazonaws.com/esci_filters.json --out ./1_build_db/esci_filters.json
 curl https://cs6400.s3.ap-northeast-1.amazonaws.com/amz_c4_filters.json --out ./1_build_db/amz_c4_filters.json
 ```
+
 These filters are extracted from the ESCI and Amazon C4 datasets and matched to a calculated selectivity level (`match_percentage`). These levels will be used for hybrid query generation in our evaluation. The downloaded files are stored under the directory ./1_build_db.
 
 4. Make sure the necessary python packages are installed
@@ -34,7 +62,7 @@ These filters are extracted from the ESCI and Amazon C4 datasets and matched to 
 pip install -r requirements.txt
 ```
 
-5. Pre-process Amazon Reviews'23, create the .csv data files, and store under the directory `./amz2023_processed`. Then, create the main sqlite database and populate the `products` and `reviews` tables. 
+5. Pre-process Amazon Reviews'23, create the .csv data files, and store under the directory `./amz2023_processed`. Then, create the main sqlite database and populate the `products` and `reviews` tables.
 
 ```bash
 python 1_build_db/process_amazon_reviews.py --input_dir ./amz2023_raw --out_dir ./amz2023_processed
