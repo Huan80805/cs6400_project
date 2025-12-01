@@ -163,13 +163,13 @@ class DB:
                     raise ValueError(
                         f"BETWEEN operator requires a 2-element list/tuple. Got {val}"
                     )
-                clauses.append(f"AND {col} BETWEEN ? AND ?")
+                clauses.append(f"({col} BETWEEN ? AND ?)")
                 params.extend(val)  # Add both values to params
             else:
-                clauses.append(f"AND {col} {op} ?")
+                clauses.append(f"({col} {op} ?)")
                 params.append(val)
 
-        return " ".join(clauses), tuple(params)
+        return " AND ".join(clauses), tuple(params)
 
     def get_filtered_ids(self, candidate_ids: List[int], filter: Dict) -> Set[int]:
         """
@@ -188,13 +188,25 @@ class DB:
         sql = f"""
            SELECT product_id FROM products
            WHERE product_id IN ({placeholders})
-           {where_clause}
+           AND {where_clause}
         """
 
         # Combine candidate IDs and filter params
         params = (*candidate_ids, *filter_params)
 
         cur.execute(sql, params)
+        final_ids = {row[0] for row in cur.fetchall()}
+        return final_ids
+
+    def get_all_ids_matching_filter(self, filter: Dict) -> Set[int]:
+        cur = self.conn.cursor()
+        where_clause, filter_params = self._build_filter_clause(filter)
+        sql = f"""
+           SELECT product_id FROM products
+           WHERE {where_clause}
+        """
+        cur.execute(sql, filter_params)
+
         final_ids = {row[0] for row in cur.fetchall()}
         return final_ids
 
