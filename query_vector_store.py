@@ -79,7 +79,7 @@ class QueryVectorStore:
     def load_query_embeddings(self) -> tuple[list[tuple[int, int, str]], np.ndarray]:
         if os.path.exists(self.embedding_file_path):
             qid_pid_filter_list, all_query_vectors = (
-                self.read_query_embeddings_from_cache(self.embedding_file_path)
+                self.read_query_embeddings_from_cache()
             )
         else:
             print(

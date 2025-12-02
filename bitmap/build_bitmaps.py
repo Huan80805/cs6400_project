@@ -7,7 +7,7 @@ from collections import defaultdict
 from typing import Any, Dict, List, Tuple
 
 from pyroaring import BitMap
-from bitmap.bitmap_keys import make_key  # shared key builder
+from .bitmap_keys import make_key  # shared key builder
 
 
 def infer_op(col: str, val: Any) -> str:

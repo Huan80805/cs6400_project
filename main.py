@@ -31,13 +31,30 @@ def main():
         default="esci",
         help="Dataset to use for queries: 'esci' or 'amz_c4' (default: esci)",
     )
+    parser.add_argument(
+        "--m_factor",
+        type=int,
+        required=True,
+        help="Over-fetch factor",
+    )
+    parser.add_argument(
+        "--rebuild_index",
+        action="store_true",
+        help="If set, each prefilter request will include a faiss index rebuild",
+    )
+    parser.add_argument(
+        "--output_file",
+        type=str,
+        required=True,
+        help="Text file to write the metrics results",
+    )
     args = parser.parse_args()
 
     DB_PATH = "amz.db"
     EMBEDDINGS_PATH = "embeddings.parquet"
 
     K_GOAL = 1
-    M_FACTOR = 100  # large over-fetch factor for postfiltering
+    M_FACTOR = args.m_factor  # large over-fetch factor for postfiltering
     K_FETCH = K_GOAL * M_FACTOR
 
     SELECTIVITY_TARGETS = [
@@ -68,14 +85,18 @@ def main():
     # 1) Raw prefilter: SQL filter → Flat ANN
     # ============================================================
     search_instances.append(
-        FlatPrefilter(db, encoder, vector_store, flat_l2_index, rebuild_index=False)
+        FlatPrefilter(
+            db, encoder, vector_store, flat_l2_index, rebuild_index=args.rebuild_index
+        )
     )
 
     # ============================================================
     # 2) IVFPQ prefilter: SQL filter → IVFPQ ANN
     # ============================================================
     search_instances.append(
-        IVFPQPrefilter(db, encoder, vector_store, ivfpq_index, rebuild_index=False)
+        IVFPQPrefilter(
+            db, encoder, vector_store, ivfpq_index, rebuild_index=args.rebuild_index
+        )
     )
 
     # ============================================================
@@ -83,7 +104,12 @@ def main():
     # ============================================================
     search_instances.append(
         FlatPrefilterRoaring(
-            db, encoder, vector_store, roaring, flat_l2_index, rebuild_index=False
+            db,
+            encoder,
+            vector_store,
+            roaring,
+            flat_l2_index,
+            rebuild_index=args.rebuild_index,
         )
     )
 
@@ -92,7 +118,12 @@ def main():
     # ============================================================
     search_instances.append(
         IVFPQPrefilterRoaring(
-            db, encoder, vector_store, roaring, ivfpq_index, rebuild_index=False
+            db,
+            encoder,
+            vector_store,
+            roaring,
+            ivfpq_index,
+            rebuild_index=args.rebuild_index,
         )
     )
 
@@ -124,7 +155,7 @@ def main():
         result = s.evaluate(
             qid_pid_filter_list, all_query_vectors, SELECTIVITY_TARGETS, K_FETCH
         )
-        s.log_results_summary(result, M_FACTOR, K_FETCH, "results.txt")
+        s.log_results_summary(result, M_FACTOR, K_FETCH, args.output_file)
 
     db.close()
 
