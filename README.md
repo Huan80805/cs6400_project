@@ -39,6 +39,13 @@
 
 - `./main.py`: Main evaluation loop for different search classes outlined above
 
+## Section 3.4 (Results)
+
+- `./pace_results/esci_fetch_100.txt`: Evaluation results of using ESCI queries + fetching most similar 100 products
+- `./pace_results/esci_fetch_1000.txt`: Evaluation results of using ESCI queries + fetching most similar 1000 products
+- `./pace_results/amz_c4_fetch_100.txt`: Evaluation results of using Amazon C4 queries + fetching most similar 100 products
+- `./pace_results/esci_fetch_100.txt`: Evaluation results of using Amazon C4 queries + fetching most similar 1000 products
+
 # Setup
 
 ## Build Database
