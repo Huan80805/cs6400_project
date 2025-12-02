@@ -41,6 +41,8 @@
 
 ## Section 3.4 (Results)
 
+The results below are obtained on a 24-core, 160GB RAM PACE cluster:
+
 - `./pace_results/esci_fetch_100.txt`: Evaluation results of using ESCI queries + fetching most similar 100 products
 - `./pace_results/esci_fetch_1000.txt`: Evaluation results of using ESCI queries + fetching most similar 1000 products
 - `./pace_results/amz_c4_fetch_100.txt`: Evaluation results of using Amazon C4 queries + fetching most similar 100 products
